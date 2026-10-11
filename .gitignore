@@ -24,3 +24,4 @@ Thumbs.db
 # Python (future)
 __pycache__/
 .venv/
+backend/startup.log
