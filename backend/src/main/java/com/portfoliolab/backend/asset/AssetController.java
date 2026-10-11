@@ -10,14 +10,14 @@ import java.util.List;
 @RequestMapping("/api/assets")
 public class AssetController {
 
-    private final AssetRepository assetRepository;
+    private final AssetService assetService;
 
-    public AssetController(AssetRepository assetRepository) {
-        this.assetRepository = assetRepository;
+    public AssetController(AssetService assetService) {
+        this.assetService = assetService;
     }
 
     @GetMapping
-    public List<Asset> getAllAssets() {
-        return assetRepository.findAll();
+    public List<AssetResponse> getAllAssets() {
+        return assetService.getAllAssets();
     }
 }
