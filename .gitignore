@@ -25,3 +25,12 @@ Thumbs.db
 __pycache__/
 .venv/
 backend/startup.log
+
+# Local backups and temporary files
+backups/
+*.bak
+*.log
+
+# Local secrets
+.env.*
+!.env.example
