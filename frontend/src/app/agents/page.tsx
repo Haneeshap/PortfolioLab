@@ -1,20 +1,6 @@
 import DividendAgent from "@/components/DividendAgent";
 import BonusAgent from "@/components/BonusAgent";
-
-const plannedAgents = [
-  {
-    name: "Business Rules Agent",
-    category: "Validation & Business Rules",
-    description:
-      "Evaluate predefined rules for simulated portfolio operations and corporate actions.",
-    capabilities: [
-      "Business rule validation",
-      "Input and eligibility checks",
-      "Explainable validation results"
-    ],
-    icon: "?"
-  }
-];
+import BusinessRulesAgent from "@/components/BusinessRulesAgent";
 
 export default function AgentsPage() {
   return (
@@ -37,8 +23,8 @@ export default function AgentsPage() {
 
           <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
             Tool-backed workflows for simulated corporate actions
-            and business rule validation. These workflows use
-            predefined calculations and validation rules rather
+            and stock-market rule evaluations. These agents use
+            predefined calculations and market-rule checks rather
             than autonomous AI decision-making.
           </p>
         </div>
@@ -48,66 +34,7 @@ export default function AgentsPage() {
 
       <BonusAgent />
 
-      <section className="space-y-4">
-        <h3 className="text-lg font-semibold text-white">
-          Upcoming Agent
-        </h3>
-
-        <div className="grid gap-5 md:grid-cols-2">
-          {plannedAgents.map((agent) => (
-            <article
-              key={agent.name}
-              className="flex flex-col rounded-2xl border border-slate-800 bg-slate-900 p-6"
-            >
-              <div className="mb-5 flex items-start justify-between">
-                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/10 text-xl font-bold text-emerald-400">
-                  {agent.icon}
-                </div>
-
-                <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-400">
-                  Planned
-                </span>
-              </div>
-
-              <p className="text-xs font-medium uppercase tracking-wider text-emerald-400">
-                {agent.category}
-              </p>
-
-              <h4 className="mt-2 text-lg font-semibold text-white">
-                {agent.name}
-              </h4>
-
-              <p className="mt-3 text-sm leading-6 text-slate-400">
-                {agent.description}
-              </p>
-
-              <div className="mt-6 border-t border-slate-800 pt-5">
-                <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Planned capabilities
-                </p>
-
-                <ul className="space-y-3">
-                  {agent.capabilities.map((capability) => (
-                    <li
-                      key={capability}
-                      className="flex items-start gap-2 text-sm text-slate-300"
-                    >
-                      <span className="text-emerald-400">✓</span>
-                      <span>{capability}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <div className="mt-auto pt-7">
-                <div className="rounded-lg border border-slate-700 bg-slate-800/50 px-4 py-3 text-center text-sm font-medium text-slate-400">
-                  Coming Soon
-                </div>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
+      <BusinessRulesAgent />
 
       <section className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-6">
         <h3 className="font-semibold text-white">
@@ -115,11 +42,13 @@ export default function AgentsPage() {
         </h3>
 
         <p className="mt-2 text-sm leading-6 text-slate-400">
-          The Dividend Agent calculates hypothetical payouts, while
-          the Bonus Agent calculates hypothetical additional shares
-          and post-bonus totals. Both operate on supplied inputs.
-          Neither places trades, modifies holdings, or automatically
-          applies corporate actions.
+          The Dividend Agent calculates hypothetical payouts.
+          The Bonus Agent calculates hypothetical additional shares
+          and post-bonus totals. The Business Rules Agent evaluates
+          simulated BUY and SELL transactions against supplied
+          market-specific rules for NSE, BSE, NYSE, and Nasdaq.
+          None of these agents places trades, modifies holdings,
+          or verifies live exchange approval.
         </p>
       </section>
     </div>
