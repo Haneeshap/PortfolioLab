@@ -11,6 +11,11 @@ public record HoldingResponse(
         BigDecimal currentPrice,
         BigDecimal marketValue,
         BigDecimal unrealizedProfitLoss,
-        String currency
+        String currency,
+        BigDecimal currentFxRate,
+        BigDecimal marketValueInPortfolioCurrency,
+        String portfolioCurrency,
+        BigDecimal historicalCostInPortfolioCurrency,
+        BigDecimal unrealizedProfitLossInPortfolioCurrency
 ) {
 }

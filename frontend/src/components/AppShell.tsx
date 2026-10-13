@@ -8,6 +8,7 @@ const navigation = [
   { label: "Overview", href: "/", icon: "▦" },
   { label: "Markets", href: "/markets", icon: "↗" },
   { label: "Portfolio", href: "/portfolio", icon: "◈" },
+  { label: "FX Analytics", href: "/fx", icon: "⇄" },
   { label: "Activity", href: "/activity", icon: "◷" },
 ];
 

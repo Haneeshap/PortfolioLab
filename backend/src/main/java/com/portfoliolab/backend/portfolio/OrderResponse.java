@@ -11,6 +11,9 @@ public record OrderResponse(
         BigDecimal pricePerUnit,
         BigDecimal totalAmount,
         String currency,
+        BigDecimal executionFxRate,
+        BigDecimal portfolioAmount,
+        String portfolioCurrency,
         BigDecimal remainingCashBalance
 ) {
 }

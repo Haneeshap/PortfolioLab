@@ -1,54 +1,12 @@
 
 "use client";
 
-import { useMarketPrices } from "@/components/MarketPriceProvider";
+import {
+  usePortfolioData,
+  formatMoney,
+} from "@/components/usePortfolioData";
 import TradeForm from "@/components/TradeForm";
-import { useEffect, useState } from "react";
 
-type Portfolio = {
-  id: number;
-  name: string;
-  cashBalance: number;
-  currency: string;
-};
-
-type Holding = {
-  assetId: number;
-  symbol: string;
-  name: string;
-  quantity: number;
-  averageBuyPrice: number;
-  currentPrice: number;
-  marketValue: number;
-  unrealizedProfitLoss: number;
-  currency: string;
-};
-
-type Transaction = {
-  id: number;
-  assetSymbol: string;
-  type: string;
-  quantity: number;
-  pricePerUnit: number;
-  totalAmount: number;
-  currency: string;
-  createdAt: string;
-};
-
-type PortfolioData = {
-  portfolio: Portfolio;
-  holdings: Holding[];
-  transactions: Transaction[];
-};
-
-function formatMoney(value: number, currency: string) {
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency,
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value);
-}
 
 type Asset = {
   id: number;
@@ -63,65 +21,24 @@ export default function PortfolioDashboard({
 }: {
   assets: Asset[];
 }) {
-  const [data, setData] = useState<PortfolioData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const { prices: livePrices, status: marketStatus } = useMarketPrices();
-
-const livePriceBySymbol = new Map(
-  livePrices.map((asset) => [asset.symbol, asset])
-);
-async function refreshPortfolio(): Promise<void> {
-  const response = await fetch("/api/portfolio", {
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    throw new Error("Unable to refresh portfolio");
-  }
-
-  const result: PortfolioData = await response.json();
-
-  setData(result);
-  setError(null);
-}
-  useEffect(() => {
-    const controller = new AbortController();
-
-    async function loadPortfolio() {
-      try {
-        const response = await fetch("/api/portfolio", {
-          cache: "no-store",
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          throw new Error("Unable to load portfolio data");
-        }
-
-        const result: PortfolioData = await response.json();
-        setData(result);
-      } catch (err) {
-        if (controller.signal.aborted) return;
-
-        setError(
-          err instanceof Error ? err.message : "Unknown error"
-        );
-      } finally {
-        if (!controller.signal.aborted) setLoading(false);
-      }
-    }
-
-    void loadPortfolio();
-
-    return () => controller.abort();
-  }, []);
+  const {
+    portfolio,
+    holdings: valuedHoldings,
+    transactions,
+    loading,
+    error,
+    refresh,
+    investedAmount,
+    unrealizedProfitLoss,
+    totalValue,
+    isPortfolioLive,
+  } = usePortfolioData();
 
   if (loading) {
     return <p className="text-gray-500">Loading portfolio...</p>;
   }
 
-  if (error || !data) {
+  if (error || !portfolio) {
     return (
       <p className="text-red-500">
         {error ?? "Portfolio data unavailable"}
@@ -129,58 +46,10 @@ async function refreshPortfolio(): Promise<void> {
     );
   }
 
-  const { portfolio, holdings, transactions } = data;
-
-// Calculate each holding using its latest simulated price.
-const valuedHoldings = holdings.map((holding) => {
-  const liveQuote = livePriceBySymbol.get(holding.symbol);
-
-  const priceIsLive =
-    marketStatus === "connected" &&
-    liveQuote?.currency === holding.currency;
-
-  const currentPrice = priceIsLive
-    ? liveQuote.price
-    : holding.currentPrice;
-
-  const marketValue = holding.quantity * currentPrice;
-
-  const investedAmount =
-    holding.quantity * holding.averageBuyPrice;
-
-  return {
-    ...holding,
-    currentPrice,
-    marketValue,
-    unrealizedProfitLoss: marketValue - investedAmount,
-    priceIsLive,
-  };
-});
-
-const holdingsValue = valuedHoldings.reduce(
-  (sum, holding) => sum + holding.marketValue,
-  0
-);
-
-const investedAmount = valuedHoldings.reduce(
-  (sum, holding) =>
-    sum + holding.quantity * holding.averageBuyPrice,
-  0
-);
-
-const unrealizedProfitLoss = holdingsValue - investedAmount;
-
-const totalValue = portfolio.cashBalance + holdingsValue;
-
-const isPortfolioLive =
-  valuedHoldings.length > 0 &&
-  valuedHoldings.every((holding) => holding.priceIsLive);
-
-  return (
-    <section className="space-y-6">
+  return (    <section className="space-y-6">
         <TradeForm
   assets={assets}
-  onTradeCompleted={refreshPortfolio}
+  onTradeCompleted={refresh}
 />
       <div>
         <h2 className="text-2xl font-semibold">My Portfolio</h2>
@@ -206,7 +75,7 @@ const isPortfolioLive =
   />
 
   <SummaryCard
-    label="Unrealized P&L"
+    label="Unrealized P&L (Including FX)"
     value={formatMoney(unrealizedProfitLoss, portfolio.currency)}
   />
 </div>
@@ -222,7 +91,7 @@ const isPortfolioLive =
           Your Holdings
         </h3>
 
-        {holdings.length === 0 ? (
+        {valuedHoldings.length === 0 ? (
           <p className="text-gray-500">
             You don't own any assets yet.
           </p>
@@ -234,7 +103,7 @@ const isPortfolioLive =
                   <th className="py-3">Asset</th>
                   <th>Quantity</th>
                   <th>Average Price</th>
-                  <th>Market Value</th>
+                  <th>Historical Cost</th><th>Market Value</th>
                   <th>Unrealized P/L</th>
                 </tr>
               </thead>
@@ -262,20 +131,26 @@ const isPortfolioLive =
                     </td>
                     <td>
                       {formatMoney(
-                        holding.marketValue,
-                        holding.currency
+                        holding.historicalCostInPortfolioCurrency,
+                        portfolio.currency
+                      )}
+                    </td>
+                    <td>
+                      {formatMoney(
+                        holding.marketValueInPortfolioCurrency,
+                        portfolio.currency
                       )}
                     </td>
                     <td
                       className={
-                        holding.unrealizedProfitLoss >= 0
+                        holding.unrealizedProfitLossInPortfolioCurrency >= 0
                           ? "text-green-600"
                           : "text-red-500"
                       }
                     >
                       {formatMoney(
-                        holding.unrealizedProfitLoss,
-                        holding.currency
+                        holding.unrealizedProfitLossInPortfolioCurrency,
+                        portfolio.currency
                       )}
                     </td>
                   </tr>

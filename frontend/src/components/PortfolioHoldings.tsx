@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import TradeForm from "@/components/TradeForm";
 import {
@@ -74,7 +74,7 @@ export default function PortfolioHoldings({
                   <th className="px-6 py-4">Asset</th>
                   <th className="px-6 py-4">Quantity</th>
                   <th className="px-6 py-4">Avg. Buy</th>
-                  <th className="px-6 py-4">Live Value</th>
+                  <th className="px-6 py-4">Historical Cost</th><th className="px-6 py-4">Live Value</th>
                   <th className="px-6 py-4">Unrealized P&L</th>
                 </tr>
               </thead>
@@ -103,21 +103,51 @@ export default function PortfolioHoldings({
                     </td>
                     <td className="px-6 py-4">
                       {formatMoney(
-                        holding.marketValue,
-                        holding.currency
+                        holding.historicalCostInPortfolioCurrency,
+                        portfolio.currency
                       )}
+                    </td>
+                    <td className="px-6 py-4">
+                      <div>
+                        <p className="font-medium">
+                          {formatMoney(
+                            holding.marketValue,
+                            holding.currency
+                          )}
+                        </p>
+                        {holding.currency !== portfolio.currency && (
+                          <p className="mt-1 text-xs text-slate-400">
+                            {formatMoney(
+                              holding.marketValueInPortfolioCurrency,
+                              portfolio.currency
+                            )}{" "}
+                            in portfolio currency
+                          </p>
+                        )}
+                      </div>
                     </td>
                     <td
                       className={`px-6 py-4 font-medium ${
-                        holding.unrealizedProfitLoss >= 0
+                        holding.unrealizedProfitLossInPortfolioCurrency >= 0
                           ? "text-emerald-400"
                           : "text-red-400"
                       }`}
                     >
-                      {formatMoney(
-                        holding.unrealizedProfitLoss,
-                        holding.currency
-                      )}
+                      <div>
+                        {formatMoney(
+                          holding.unrealizedProfitLossInPortfolioCurrency,
+                          portfolio.currency
+                        )}
+                        {holding.currency !== portfolio.currency && (
+                          <p className="mt-1 text-xs text-slate-400">
+                            Price-only P&L:{" "}
+                            {formatMoney(
+                              holding.unrealizedProfitLoss,
+                              holding.currency
+                            )}
+                          </p>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

@@ -1,8 +1,8 @@
-
 package com.portfoliolab.backend.portfolio;
 
 import com.portfoliolab.backend.asset.Asset;
 import com.portfoliolab.backend.asset.AssetRepository;
+import com.portfoliolab.backend.fx.FrankfurterRateService;
 import com.portfoliolab.backend.market.MarketPrice;
 import com.portfoliolab.backend.market.MarketService;
 import org.springframework.http.HttpStatus;
@@ -13,7 +13,6 @@ import org.springframework.web.server.ResponseStatusException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.Locale;
-
 @Service
 public class OrderService {
 
@@ -22,19 +21,22 @@ public class OrderService {
     private final HoldingRepository holdingRepository;
     private final TransactionRepository transactionRepository;
     private final MarketService marketService;
+    private final FrankfurterRateService frankfurterRateService;
 
     public OrderService(
             PortfolioRepository portfolioRepository,
             AssetRepository assetRepository,
             HoldingRepository holdingRepository,
             TransactionRepository transactionRepository,
-            MarketService marketService
+            MarketService marketService,
+            FrankfurterRateService frankfurterRateService
     ) {
         this.portfolioRepository = portfolioRepository;
         this.assetRepository = assetRepository;
         this.holdingRepository = holdingRepository;
         this.transactionRepository = transactionRepository;
         this.marketService = marketService;
+        this.frankfurterRateService = frankfurterRateService;
     }
 
     @Transactional
@@ -81,12 +83,7 @@ public class OrderService {
                         "Asset not found"
                 ));
 
-        if (!portfolio.getCurrency().equals(asset.getCurrency())) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Asset currency differs from portfolio currency"
-            );
-        }
+
 
         MarketPrice quote;
         try {
@@ -138,14 +135,50 @@ public class OrderService {
             );
         }
 
+        BigDecimal executionFxRate;
+
+        if (asset.getCurrency().equals(portfolio.getCurrency())) {
+            executionFxRate = BigDecimal.ONE.setScale(8);
+        } else {
+            try {
+                executionFxRate = frankfurterRateService.getLatestRate(
+                        asset.getCurrency(),
+                        portfolio.getCurrency()
+                ).rate().setScale(8, RoundingMode.HALF_UP);
+            } catch (Exception exception) {
+                throw new ResponseStatusException(
+                        HttpStatus.SERVICE_UNAVAILABLE,
+                        "FX reference rate unavailable",
+                        exception
+                );
+            }
+        }
+
+        if (executionFxRate.signum() <= 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Invalid FX reference rate"
+            );
+        }
+
+        BigDecimal portfolioAmount = total.multiply(executionFxRate)
+                .setScale(4, RoundingMode.HALF_UP);
+
+        if (portfolioAmount.precision() > 19) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Converted order total exceeds supported precision"
+            );
+        }
+
         Holding holding = holdingRepository
                 .findByPortfolioIdAndAssetId(portfolioId, asset.getId())
                 .orElse(null);
 
         if (type.equals("BUY")) {
-            processBuy(portfolio, asset, holding, quantity, price, total);
+            processBuy(portfolio, asset, holding, quantity, price, portfolioAmount);
         } else {
-            processSell(portfolio, holding, quantity, total);
+            processSell(portfolio, holding, quantity, portfolioAmount);
         }
 
         Transaction transaction = new Transaction(
@@ -155,7 +188,9 @@ public class OrderService {
                 quantity,
                 price,
                 total,
-                asset.getCurrency()
+                asset.getCurrency(),
+                executionFxRate,
+                portfolioAmount
         );
 
         transactionRepository.save(transaction);
@@ -169,6 +204,9 @@ public class OrderService {
                 price,
                 total,
                 asset.getCurrency(),
+                executionFxRate,
+                portfolioAmount,
+                portfolio.getCurrency(),
                 portfolio.getCashBalance()
         );
     }
@@ -189,9 +227,11 @@ public class OrderService {
         }
 
         if (holding == null) {
-            holdingRepository.save(
-                    new Holding(portfolio, asset, quantity, price)
+            Holding created = new Holding(
+                    portfolio, asset, quantity, price
             );
+            created.setHistoricalCostPortfolio(total);
+            holdingRepository.save(created);
         } else {
             BigDecimal oldQuantity = holding.getQuantity();
             BigDecimal newQuantity = oldQuantity.add(quantity);
@@ -205,7 +245,12 @@ public class OrderService {
             BigDecimal newAverage = oldCost.add(newCost)
                     .divide(newQuantity, 4, RoundingMode.HALF_UP);
 
+            BigDecimal updatedHistoricalCost = holding
+                    .getHistoricalCostPortfolio()
+                    .add(total);
+
             holding.updatePosition(newQuantity, newAverage);
+            holding.setHistoricalCostPortfolio(updatedHistoricalCost);
         }
 
         portfolio.setCashBalance(
@@ -227,14 +272,24 @@ public class OrderService {
             );
         }
 
-        BigDecimal remaining = holding.getQuantity().subtract(quantity);
+        BigDecimal originalQuantity = holding.getQuantity();
+        BigDecimal remaining = originalQuantity.subtract(quantity);
 
         if (remaining.signum() == 0) {
             holdingRepository.delete(holding);
         } else {
+            BigDecimal remainingHistoricalCost = holding
+                    .getHistoricalCostPortfolio()
+                    .multiply(remaining)
+                    .divide(originalQuantity, 4, RoundingMode.HALF_UP);
+
             holding.updatePosition(
                     remaining,
                     holding.getAverageBuyPrice()
+            );
+
+            holding.setHistoricalCostPortfolio(
+                    remainingHistoricalCost
             );
         }
 

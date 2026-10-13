@@ -1,7 +1,11 @@
-﻿"use client";
+"use client";
 
 import { useCallback, useEffect, useState } from "react";
 import { useMarketPrices } from "@/components/MarketPriceProvider";
+import {
+  valueHolding,
+  summarizeHoldings,
+} from "@/components/portfolioValuation";
 
 export type Portfolio = {
   id: number;
@@ -20,6 +24,11 @@ export type Holding = {
   marketValue: number;
   unrealizedProfitLoss: number;
   currency: string;
+  currentFxRate: number;
+  marketValueInPortfolioCurrency: number;
+  portfolioCurrency: string;
+  historicalCostInPortfolioCurrency: number;
+  unrealizedProfitLossInPortfolioCurrency: number;
 };
 
 export type Transaction = {
@@ -121,35 +130,29 @@ export function usePortfolioData() {
       ? quote.price
       : holding.currentPrice;
 
-    const marketValue = holding.quantity * currentPrice;
-    const costBasis =
-      holding.quantity * holding.averageBuyPrice;
+    const fxRate =
+      holding.currency === data?.portfolio.currency
+        ? 1
+        : holding.currentFxRate;
 
     return {
-      ...holding,
-      currentPrice,
-      marketValue,
-      unrealizedProfitLoss: marketValue - costBasis,
+      ...valueHolding(
+        { ...holding, currentFxRate: fxRate },
+        currentPrice
+      ),
       priceIsLive,
     };
   });
 
-  const holdingsValue = holdings.reduce(
-    (sum, holding) => sum + holding.marketValue,
-    0
+  const {
+    holdingsValue,
+    investedAmount,
+    unrealizedProfitLoss,
+    totalValue,
+  } = summarizeHoldings(
+    holdings,
+    data?.portfolio.cashBalance ?? 0
   );
-
-  const investedAmount = holdings.reduce(
-    (sum, holding) =>
-      sum + holding.quantity * holding.averageBuyPrice,
-    0
-  );
-
-  const unrealizedProfitLoss = holdingsValue - investedAmount;
-
-  const totalValue =
-    (data?.portfolio.cashBalance ?? 0) + holdingsValue;
-
   const isPortfolioLive =
     holdings.length > 0 &&
     holdings.every((holding) => holding.priceIsLive);

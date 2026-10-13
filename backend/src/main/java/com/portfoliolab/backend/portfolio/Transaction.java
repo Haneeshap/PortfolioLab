@@ -34,6 +34,12 @@ public class Transaction {
     @Column(name = "total_amount", nullable = false, precision = 19, scale = 4)
     private BigDecimal totalAmount;
 
+    @Column(name = "execution_fx_rate", nullable = false, precision = 19, scale = 8)
+private BigDecimal executionFxRate;
+
+@Column(name = "portfolio_amount", nullable = false, precision = 19, scale = 4)
+private BigDecimal portfolioAmount;
+
     @Column(nullable = false, length = 3)
     private String currency;
 
@@ -43,23 +49,27 @@ public class Transaction {
     protected Transaction() {
     }
 
-    public Transaction(
-            Portfolio portfolio,
-            Asset asset,
-            String transactionType,
-            BigDecimal quantity,
-            BigDecimal pricePerUnit,
-            BigDecimal totalAmount,
-            String currency
-    ) {
-        this.portfolio = portfolio;
-        this.asset = asset;
-        this.transactionType = transactionType;
-        this.quantity = quantity;
-        this.pricePerUnit = pricePerUnit;
-        this.totalAmount = totalAmount;
-        this.currency = currency;
-    }
+   public Transaction(
+        Portfolio portfolio,
+        Asset asset,
+        String transactionType,
+        BigDecimal quantity,
+        BigDecimal pricePerUnit,
+        BigDecimal totalAmount,
+        String currency,
+        BigDecimal executionFxRate,
+        BigDecimal portfolioAmount
+) {
+    this.portfolio = portfolio;
+    this.asset = asset;
+    this.transactionType = transactionType;
+    this.quantity = quantity;
+    this.pricePerUnit = pricePerUnit;
+    this.totalAmount = totalAmount;
+    this.currency = currency;
+    this.executionFxRate = executionFxRate;
+    this.portfolioAmount = portfolioAmount;
+}
 
     public Long getId() {
         return id;
@@ -96,4 +106,11 @@ public class Transaction {
     public Instant getCreatedAt() {
         return createdAt;
     }
+public BigDecimal getExecutionFxRate() {
+    return executionFxRate;
+}
+
+public BigDecimal getPortfolioAmount() {
+    return portfolioAmount;
+}
 }

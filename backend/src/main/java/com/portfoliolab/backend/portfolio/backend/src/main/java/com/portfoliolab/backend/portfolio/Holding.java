@@ -38,6 +38,14 @@ public class Holding {
     )
     private BigDecimal averageBuyPrice;
 
+    @Column(
+        name = "historical_cost_portfolio",
+        nullable = false,
+        precision = 19,
+        scale = 4
+    )
+    private BigDecimal historicalCostPortfolio;
+
     protected Holding() {
     }
 
@@ -51,6 +59,24 @@ public class Holding {
         this.asset = asset;
         this.quantity = quantity;
         this.averageBuyPrice = averageBuyPrice;
+        this.historicalCostPortfolio = quantity
+                .multiply(averageBuyPrice)
+                .setScale(4, java.math.RoundingMode.HALF_UP);
+    }
+
+    public BigDecimal getHistoricalCostPortfolio() {
+        return historicalCostPortfolio;
+    }
+
+    public void setHistoricalCostPortfolio(BigDecimal value) {
+        if (value == null || value.signum() < 0) {
+            throw new IllegalArgumentException(
+                "Historical cost must be nonnegative"
+            );
+        }
+        this.historicalCostPortfolio = value.setScale(
+                4, java.math.RoundingMode.HALF_UP
+        );
     }
 
     public Long getId() {
