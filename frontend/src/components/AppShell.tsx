@@ -1,5 +1,5 @@
 ﻿"use client";
-
+import PortfolioChat from "./PortfolioChat";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, type ReactNode } from "react";
@@ -9,6 +9,7 @@ const navigation = [
   { label: "Markets", href: "/markets", icon: "↗" },
   { label: "Portfolio", href: "/portfolio", icon: "◈" },
   { label: "FX Analytics", href: "/fx", icon: "⇄" },
+  { label: "AI Agents", href: "/agents", icon: "✦" },
   { label: "Activity", href: "/activity", icon: "◷" },
 ];
 
@@ -111,10 +112,12 @@ export default function AppShell({
           </span>
         </header>
 
-        <main className="mx-auto max-w-7xl space-y-8 px-5 py-8 sm:px-8">
+       <main className="mx-auto max-w-7xl space-y-8 px-5 py-8 sm:px-8">
           {children}
-        </main>
+       </main>
       </div>
+
+      <PortfolioChat />
     </div>
   );
 }
