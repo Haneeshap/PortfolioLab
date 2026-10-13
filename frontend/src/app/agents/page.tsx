@@ -1,26 +1,15 @@
 import DividendAgent from "@/components/DividendAgent";
+import BonusAgent from "@/components/BonusAgent";
 
 const plannedAgents = [
   {
-    name: "Bonus Agent",
-    category: "Corporate Actions",
-    description:
-      "Simulate bonus share issues and explain how they affect hypothetical holdings.",
-    capabilities: [
-      "Bonus ratio calculations",
-      "Additional share simulations",
-      "Post-bonus holdings preview"
-    ],
-    icon: "+"
-  },
-  {
     name: "Business Rules Agent",
-    category: "Validation & Compliance",
+    category: "Validation & Business Rules",
     description:
       "Evaluate predefined rules for simulated portfolio operations and corporate actions.",
     capabilities: [
       "Business rule validation",
-      "Eligibility checks",
+      "Input and eligibility checks",
       "Explainable validation results"
     ],
     icon: "?"
@@ -33,7 +22,7 @@ export default function AgentsPage() {
       <section className="space-y-3">
         <div className="flex flex-wrap items-center gap-3">
           <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-400">
-            AI WORKSPACE
+            AGENT WORKSPACE
           </span>
 
           <span className="text-xs text-slate-500">
@@ -43,22 +32,25 @@ export default function AgentsPage() {
 
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-white">
-            Specialized AI Agents
+            Specialized Agents
           </h2>
 
           <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
-            Specialized workflows for simulated corporate actions
-            and business rule validation. These tools are developed
-            separately from the general Ask AI chatbot.
+            Tool-backed workflows for simulated corporate actions
+            and business rule validation. These workflows use
+            predefined calculations and validation rules rather
+            than autonomous AI decision-making.
           </p>
         </div>
       </section>
 
       <DividendAgent />
 
+      <BonusAgent />
+
       <section className="space-y-4">
         <h3 className="text-lg font-semibold text-white">
-          Upcoming Agents
+          Upcoming Agent
         </h3>
 
         <div className="grid gap-5 md:grid-cols-2">
@@ -123,9 +115,10 @@ export default function AgentsPage() {
         </h3>
 
         <p className="mt-2 text-sm leading-6 text-slate-400">
-          The Dividend Agent calculates hypothetical payouts from
-          supplied inputs. The remaining agents are planned.
-          No agent places trades, modifies holdings, or automatically
+          The Dividend Agent calculates hypothetical payouts, while
+          the Bonus Agent calculates hypothetical additional shares
+          and post-bonus totals. Both operate on supplied inputs.
+          Neither places trades, modifies holdings, or automatically
           applies corporate actions.
         </p>
       </section>
