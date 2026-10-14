@@ -394,7 +394,10 @@ setValidatedKey(requestKey);
         from the estimate.
       </p>
 
-      <form onSubmit={submitTrade} className="mt-6 space-y-4">
+      <div className="mt-6 grid items-start gap-6 lg:grid-cols-2">
+        <div className="min-w-0 rounded-xl border border-slate-700 bg-slate-950/50 p-5">
+          <h4 className="mb-4 text-lg font-semibold">Trade ticket</h4>
+          <form onSubmit={submitTrade} className="space-y-4">
         <div>
           <label htmlFor="trade-asset" className="mb-2 block text-sm">
             Asset
@@ -523,7 +526,17 @@ setValidatedKey(requestKey);
         >
           {submitting ? "Processing..." : `Execute ${type}`}
         </button>
-      </form>
+          </form>
+        </div>
+
+        <div className="min-w-0 space-y-4">
+          <div className="rounded-xl border border-slate-700 bg-slate-950/50 p-5">
+            <h4 className="text-lg font-semibold">Order review</h4>
+            <p className="mt-2 text-sm text-slate-400">
+              Validate an order to inspect estimated costs, buying power,
+              and simulated market rules.
+            </p>
+          </div>
 
       {validationError && (
         <p role="alert" className="mt-4 text-sm text-red-400">
@@ -532,10 +545,10 @@ setValidatedKey(requestKey);
       )}
 
       {currentValidation && orderPreview && (
-        <div className="mt-5 space-y-3 rounded-xl border border-slate-700 bg-slate-950 p-4">
+        <div className="space-y-3 rounded-xl border border-slate-700 bg-slate-950 p-4">
           <div className="flex items-center justify-between gap-3">
             <h4 className="font-semibold">
-              Order Validation
+              Order Review
               {validationIsStale && (
                 <span className="ml-2 text-xs font-normal text-amber-300">
                   (Outdated - validate again)
@@ -584,7 +597,7 @@ setValidatedKey(requestKey);
 
           <div className="space-y-2 border-t border-slate-800 pt-3">
             <h5 className="text-sm font-semibold">
-              Backend Order Preview
+              Estimated order cost
             </h5>
             <p className="text-sm text-slate-300">
               Estimated asset cost:{" "}
@@ -634,21 +647,40 @@ setValidatedKey(requestKey);
             </p>
           </div>
 
-          {currentValidation.checks.map((check) => (
-            <div key={check.code} className="border-t border-slate-800 pt-3">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-medium">
-                  {check.code.replaceAll("_", " ")}
-                </span>
-                <span className="text-xs font-semibold">
-                  {check.status}
-                </span>
-              </div>
-              <p className="mt-1 text-xs text-slate-400">
-                {check.explanation}
-              </p>
+          <details className="rounded-lg border border-slate-800 bg-slate-900/50">
+            <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-slate-200 hover:text-emerald-300">
+              Detailed market-rule checks ({currentValidation.checks.length})
+            </summary>
+
+            <div className="space-y-3 border-t border-slate-800 px-4 py-3">
+              {currentValidation.checks.map((check) => (
+                <div
+                  key={check.code}
+                  className="border-b border-slate-800 pb-3 last:border-b-0 last:pb-0"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-medium">
+                      {check.code.replaceAll("_", " ")}
+                    </span>
+                    <span
+                      className={`text-xs font-semibold ${
+                        check.status === "FAIL"
+                          ? "text-red-300"
+                          : check.status === "PASS"
+                            ? "text-emerald-300"
+                            : "text-amber-300"
+                      }`}
+                    >
+                      {check.status.replaceAll("_", " ")}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {check.explanation}
+                  </p>
+                </div>
+              ))}
             </div>
-          ))}
+          </details>
 
           <p className="text-xs leading-5 text-slate-500">
             {currentValidation.disclaimer}
@@ -659,6 +691,9 @@ setValidatedKey(requestKey);
           </p>
         </div>
       )}
+        </div>
+      </div>
+
       {message && (
         <p role="status" className="mt-4 text-sm text-emerald-400">
           {message}
