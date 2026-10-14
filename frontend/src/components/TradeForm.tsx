@@ -18,6 +18,7 @@ type TradeFormProps = {
   portfolio: Portfolio;
   holdings: Holding[];
   onTradeCompleted: () => Promise<void>;
+  holdingTradeRequest?: { assetId: number; sequence: number } | null;
 };
 
 type Market = "NSE" | "BSE" | "NYSE" | "NASDAQ";
@@ -64,6 +65,7 @@ export default function TradeForm({
   portfolio,
   holdings,
   onTradeCompleted,
+  holdingTradeRequest,
 }: TradeFormProps) {
   const { prices, status } = useMarketPrices();
 
@@ -86,6 +88,15 @@ export default function TradeForm({
       setAssetId(requestedAssetId);
     }
   }, [requestedAssetId, assets]);
+  useEffect(() => {
+    if (
+      holdingTradeRequest &&
+      assets.some((asset) => asset.id === holdingTradeRequest.assetId)
+    ) {
+      setAssetId(String(holdingTradeRequest.assetId));
+    }
+  }, [holdingTradeRequest, assets]);
+
   const [type, setType] = useState<"BUY" | "SELL">("BUY");
   const [quantity, setQuantity] = useState("1");
   const [submitting, setSubmitting] = useState(false);
@@ -204,6 +215,77 @@ export default function TradeForm({
           stale: validationIsStale,
         })
       : null;
+
+  const impactIsCurrent =
+    orderPreview !== null &&
+    currentValidation !== null &&
+    !validationIsStale &&
+    validatedKey === validationKey &&
+    orderPreview.assetSymbol === selectedAsset?.symbol &&
+    orderPreview.side === type &&
+    orderPreview.quantity === parsedQuantity;
+
+  const currentHoldingsValue = holdings.reduce(
+    (sum, holding) => sum + holding.marketValueInPortfolioCurrency,
+    0
+  );
+
+  const currentPortfolioValue =
+    currentHoldingsValue + portfolio.cashBalance;
+
+  const currentPositionValue =
+    matchingHolding?.marketValueInPortfolioCurrency ?? 0;
+
+  const estimatedTradeAmount =
+    impactIsCurrent && orderPreview
+      ? orderPreview.estimatedPortfolioTotal
+      : null;
+
+  const estimatedCashAfter =
+    estimatedTradeAmount === null
+      ? null
+      : portfolio.cashBalance +
+        (type === "BUY" ? -estimatedTradeAmount : estimatedTradeAmount);
+
+  const estimatedPositionAfter =
+    estimatedTradeAmount === null
+      ? null
+      : currentPositionValue +
+        (type === "BUY" ? estimatedTradeAmount : -estimatedTradeAmount);
+
+  const estimatedPortfolioAfter =
+    estimatedCashAfter === null || estimatedPositionAfter === null
+      ? null
+      : currentPortfolioValue +
+        (estimatedCashAfter - portfolio.cashBalance) +
+        (estimatedPositionAfter - currentPositionValue);
+
+  const impactCanBeShown =
+    impactIsCurrent &&
+    estimatedTradeAmount !== null &&
+    estimatedCashAfter !== null &&
+    estimatedPositionAfter !== null &&
+    estimatedPortfolioAfter !== null &&
+    Number.isFinite(currentPortfolioValue) &&
+    Number.isFinite(estimatedCashAfter) &&
+    Number.isFinite(estimatedPositionAfter) &&
+    Number.isFinite(estimatedPortfolioAfter) &&
+    currentPortfolioValue > 0 &&
+    estimatedPortfolioAfter > 0 &&
+    estimatedCashAfter >= 0 &&
+    estimatedPositionAfter >= -0.01 &&
+    (type !== "SELL" || parsedQuantity <= availableShares);
+
+  const currentAllocation =
+    currentPortfolioValue > 0
+      ? (currentPositionValue / currentPortfolioValue) * 100
+      : 0;
+
+  const estimatedAllocation =
+    estimatedPortfolioAfter !== null && estimatedPortfolioAfter > 0 &&
+    estimatedPositionAfter !== null
+      ? (Math.max(0, estimatedPositionAfter) / estimatedPortfolioAfter) * 100
+      : 0;
 
   async function validateOrder() {
     if (
@@ -414,7 +496,7 @@ setValidatedKey(requestKey);
   }
 
   return (
-    <section className="rounded-xl border border-slate-800 bg-slate-900 p-6">
+    <section id="portfolio-trade-ticket" className="scroll-mt-6 rounded-xl border border-slate-800 bg-slate-900 p-6">
       <h3 className="text-xl font-semibold">Simulated Trading</h3>
 
       <p className="mt-2 text-sm text-slate-400">
@@ -675,6 +757,47 @@ setValidatedKey(requestKey);
               {orderPreview.disclaimer}
             </p>
           </div>
+
+          {impactCanBeShown && selectedAsset && estimatedCashAfter !== null && (
+            <div className="rounded-lg border border-slate-700 bg-slate-900 p-4">
+              <h5 className="font-semibold">Estimated portfolio impact</h5>
+              <p className="mt-1 text-xs text-slate-400">
+                Hypothetical change if this simulated order executes at the
+                previewed amount.
+              </p>
+
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <div>
+                  <p className="text-xs text-slate-400">Available cash</p>
+                  <p className="mt-1 text-sm tabular-nums text-slate-300">
+                    {formatMoney(portfolio.cashBalance, portfolio.currency)}
+                  </p>
+                  <p className="mt-1 font-semibold tabular-nums text-emerald-300">
+                    → {formatMoney(estimatedCashAfter, portfolio.currency)}
+                  </p>
+                </div>
+
+                <div>
+                  <p className="text-xs text-slate-400">
+                    {selectedAsset.symbol} allocation
+                  </p>
+                  <p className="mt-1 text-sm tabular-nums text-slate-300">
+                    {currentAllocation.toFixed(1)}%
+                  </p>
+                  <p className="mt-1 font-semibold tabular-nums text-emerald-300">
+                    → {estimatedAllocation.toFixed(1)}%
+                  </p>
+                </div>
+              </div>
+
+              <p className="mt-4 text-xs leading-5 text-slate-500">
+                Illustrative allocation using current portfolio valuations and
+                the backend's estimated trade amount. Execution prices, FX,
+                charges, and portfolio values may differ. No trade is executed
+                by this preview.
+              </p>
+            </div>
+          )}
 
           <details className="rounded-lg border border-slate-800 bg-slate-900/50">
             <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-slate-200 hover:text-emerald-300">

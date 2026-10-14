@@ -1,6 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import TradeForm from "@/components/TradeForm";
+import PortfolioAllocation from "@/components/PortfolioAllocation";
 import {
   formatMoney,
   usePortfolioData,
@@ -19,12 +21,31 @@ export default function PortfolioHoldings({
 }: {
   assets: Asset[];
 }) {
+  const [holdingTradeRequest, setHoldingTradeRequest] = useState<{
+    assetId: number;
+    sequence: number;
+  } | null>(null);
+
+  function tradeHolding(assetId: number) {
+    setHoldingTradeRequest((previous) => ({
+      assetId,
+      sequence: (previous?.sequence ?? 0) + 1,
+    }));
+
+    document.getElementById("portfolio-trade-ticket")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }
+
   const {
     portfolio,
     holdings,
     loading,
     error,
     refresh,
+    totalValue,
+    isPortfolioLive,
   } = usePortfolioData();
 
   if (loading) {
@@ -50,11 +71,19 @@ export default function PortfolioHoldings({
         </p>
       </div>
 
+      <PortfolioAllocation
+        portfolio={portfolio}
+        holdings={holdings}
+        totalValue={totalValue}
+        isPortfolioLive={isPortfolioLive}
+      />
+
       <TradeForm
         assets={assets}
         portfolio={portfolio}
         holdings={holdings}
         onTradeCompleted={refresh}
+        holdingTradeRequest={holdingTradeRequest}
       />
 
       <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
@@ -78,6 +107,7 @@ export default function PortfolioHoldings({
                   <th className="px-6 py-4">Avg. Buy</th>
                   <th className="px-6 py-4">Historical Cost</th><th className="px-6 py-4">Live Value</th>
                   <th className="px-6 py-4">Unrealized P&L</th>
+                  <th className="px-6 py-4">Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -150,6 +180,15 @@ export default function PortfolioHoldings({
                           </p>
                         )}
                       </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <button
+                        type="button"
+                        onClick={() => tradeHolding(holding.assetId)}
+                        className="cursor-pointer whitespace-nowrap rounded-lg border border-emerald-500/50 px-3 py-2 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/10 focus-visible:outline-2 focus-visible:outline-emerald-400"
+                      >
+                        Trade
+                      </button>
                     </td>
                   </tr>
                 ))}
