@@ -3,8 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMarketPrices } from "./MarketPriceProvider";
 import type { Portfolio, Holding } from "./usePortfolioData";
-import { assessOrder } from "./orderAssessment";
-
+import { assessOrder, parseRuleResult } from "./orderAssessment";
 type Asset = {
   id: number;
   symbol: string;
@@ -297,9 +296,21 @@ export default function TradeForm({
         return;
       }
 
-      setValidation(data.evaluation as ValidationResult);
-      setOrderPreview(preview);
-      setValidatedKey(requestKey);
+      const parsedEvaluation = parseRuleResult(data.evaluation);
+
+if (
+  parsedEvaluation.market !== selectedMarket ||
+  parsedEvaluation.side !== type ||
+  parsedEvaluation.currency !== selectedAsset.currency
+) {
+  throw new Error(
+    "Business rules response does not match the selected order."
+  );
+}
+
+setValidation(parsedEvaluation as ValidationResult);
+setOrderPreview(preview);
+setValidatedKey(requestKey);
     } catch (err) {
       if (latestValidationKey.current !== requestKey) {
         return;
