@@ -2,9 +2,6 @@ package com.portfoliolab.backend.portfolio;
 
 import com.portfoliolab.backend.asset.Asset;
 import com.portfoliolab.backend.asset.AssetRepository;
-import com.portfoliolab.backend.fx.FrankfurterRateService;
-import com.portfoliolab.backend.market.MarketPrice;
-import com.portfoliolab.backend.market.MarketService;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,23 +17,20 @@ public class OrderService {
     private final AssetRepository assetRepository;
     private final HoldingRepository holdingRepository;
     private final TransactionRepository transactionRepository;
-    private final MarketService marketService;
-    private final FrankfurterRateService frankfurterRateService;
+    private final OrderPricingService pricingService;
 
     public OrderService(
             PortfolioRepository portfolioRepository,
             AssetRepository assetRepository,
             HoldingRepository holdingRepository,
             TransactionRepository transactionRepository,
-            MarketService marketService,
-            FrankfurterRateService frankfurterRateService
+            OrderPricingService pricingService
     ) {
         this.portfolioRepository = portfolioRepository;
         this.assetRepository = assetRepository;
         this.holdingRepository = holdingRepository;
         this.transactionRepository = transactionRepository;
-        this.marketService = marketService;
-        this.frankfurterRateService = frankfurterRateService;
+        this.pricingService = pricingService;
     }
 
     @Transactional
@@ -85,91 +79,13 @@ public class OrderService {
 
 
 
-        MarketPrice quote;
-        try {
-            quote = marketService.getCurrentPrices()
-                    .stream()
-                    .filter(item -> asset.getSymbol().equals(item.symbol()))
-                    .findFirst()
-                    .orElse(null);
-        } catch (Exception exception) {
-            throw new ResponseStatusException(
-                    HttpStatus.SERVICE_UNAVAILABLE,
-                    "Simulated market service unavailable",
-                    exception
-            );
-        }
+        OrderPricingService.Pricing pricing =
+                pricingService.calculate(asset, portfolio, quantity);
 
-        if (quote == null ||
-                quote.price() == null ||
-                quote.price().signum() <= 0 ||
-                !asset.getCurrency().equals(quote.currency()) ||
-                quote.updatedAt() == null ||
-                quote.updatedAt().isBefore(
-                        java.time.Instant.now().minusSeconds(60)
-                ) ||
-                quote.updatedAt().isAfter(
-                        java.time.Instant.now().plusSeconds(10)
-                )) {
-            throw new ResponseStatusException(
-                    HttpStatus.SERVICE_UNAVAILABLE,
-                    "A valid, recent simulated market quote is unavailable"
-            );
-        }
-
-        BigDecimal price;
-        try {
-            price = quote.price().setScale(4, RoundingMode.HALF_UP);
-        } catch (ArithmeticException exception) {
-            throw new ResponseStatusException(
-                    HttpStatus.SERVICE_UNAVAILABLE,
-                    "Market quote exceeds supported price precision"
-            );
-        }
-        BigDecimal total = price.multiply(quantity);
-
-        if (total.precision() > 19 || total.scale() > 4) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Order total exceeds supported precision"
-            );
-        }
-
-        BigDecimal executionFxRate;
-
-        if (asset.getCurrency().equals(portfolio.getCurrency())) {
-            executionFxRate = BigDecimal.ONE.setScale(8);
-        } else {
-            try {
-                executionFxRate = frankfurterRateService.getLatestRate(
-                        asset.getCurrency(),
-                        portfolio.getCurrency()
-                ).rate().setScale(8, RoundingMode.HALF_UP);
-            } catch (Exception exception) {
-                throw new ResponseStatusException(
-                        HttpStatus.SERVICE_UNAVAILABLE,
-                        "FX reference rate unavailable",
-                        exception
-                );
-            }
-        }
-
-        if (executionFxRate.signum() <= 0) {
-            throw new ResponseStatusException(
-                    HttpStatus.SERVICE_UNAVAILABLE,
-                    "Invalid FX reference rate"
-            );
-        }
-
-        BigDecimal portfolioAmount = total.multiply(executionFxRate)
-                .setScale(4, RoundingMode.HALF_UP);
-
-        if (portfolioAmount.precision() > 19) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Converted order total exceeds supported precision"
-            );
-        }
+        BigDecimal price = pricing.price();
+        BigDecimal total = pricing.assetTotal();
+        BigDecimal executionFxRate = pricing.fxRate();
+        BigDecimal portfolioAmount = pricing.portfolioTotal();
 
         Holding holding = holdingRepository
                 .findByPortfolioIdAndAssetId(portfolioId, asset.getId())

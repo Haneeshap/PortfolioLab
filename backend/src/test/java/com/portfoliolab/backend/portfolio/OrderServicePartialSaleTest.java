@@ -92,10 +92,7 @@ class OrderServicePartialSaleTest {
                 portfolios,
                 assets,
                 holdings,
-                transactions,
-                market,
-                fx
-        );
+                transactions, new OrderPricingService(market, fx));
 
         OrderResponse response = service.placeOrder(
                 1L,

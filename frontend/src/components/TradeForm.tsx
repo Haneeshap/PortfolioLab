@@ -36,6 +36,22 @@ type ValidationResult = {
   checks: RuleCheck[];
   disclaimer: string;
 };
+type OrderPreview = {
+  assetSymbol: string;
+  side: "BUY" | "SELL";
+  quantity: number;
+  estimatedPrice: number;
+  assetCurrency: string;
+  estimatedAssetTotal: number;
+  fxRate: number;
+  estimatedPortfolioTotal: number;
+  portfolioCurrency: string;
+  availableCash: number;
+  estimatedCharges: number;
+  sufficientCash: boolean | null;
+  disclaimer: string;
+};
+
 type OrderResult = {
   pricePerUnit: number;
   totalAmount: number;
@@ -58,6 +74,7 @@ export default function TradeForm({
   const [validating, setValidating] = useState(false);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [orderPreview, setOrderPreview] = useState<OrderPreview | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -125,6 +142,7 @@ export default function TradeForm({
   const availableShares = matchingHolding?.quantity ?? 0;
 
   const validationKey = JSON.stringify({
+    portfolioId: portfolio.id,
     assetId: selectedAsset?.id,
     type,
     quantity,
@@ -163,6 +181,7 @@ export default function TradeForm({
 
     setValidating(true);
     setValidation(null);
+    setOrderPreview(null);
     setValidatedKey(null);
     setValidationError(null);
 
@@ -190,6 +209,50 @@ export default function TradeForm({
     };
 
     try {
+      const previewResponse = await fetch(
+        "/api/portfolio/orders/preview",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            assetId: selectedAsset.id,
+            type,
+            quantity: parsedQuantity,
+          }),
+          cache: "no-store",
+        }
+      );
+
+      const previewData = await previewResponse.json();
+
+      if (!previewResponse.ok) {
+        throw new Error(
+          previewData.error || "Unable to preview order."
+        );
+      }
+
+      const preview = previewData as OrderPreview;
+
+      if (
+        preview.assetSymbol !== selectedAsset.symbol ||
+        preview.side !== type ||
+        preview.quantity !== parsedQuantity ||
+        preview.assetCurrency !== selectedAsset.currency ||
+        preview.portfolioCurrency !== portfolio.currency ||
+        !Number.isFinite(preview.estimatedPortfolioTotal) ||
+        !Number.isFinite(preview.availableCash) ||
+        !Number.isFinite(preview.fxRate) ||
+        preview.fxRate <= 0 ||
+        (type === "BUY" &&
+          typeof preview.sufficientCash !== "boolean")
+      ) {
+        throw new Error("Order preview returned inconsistent data.");
+      }
+
+      if (latestValidationKey.current !== requestKey) {
+        return;
+      }
+
       const response = await fetch(
         "/api/ai/agents/business-rules/evaluate",
         {
@@ -210,6 +273,7 @@ export default function TradeForm({
       }
 
       setValidation(data.evaluation as ValidationResult);
+      setOrderPreview(preview);
       setValidatedKey(requestKey);
     } catch (err) {
       if (latestValidationKey.current !== requestKey) {
@@ -428,7 +492,7 @@ export default function TradeForm({
         </p>
       )}
 
-      {currentValidation && (
+      {currentValidation && orderPreview && (
         <div className="mt-5 space-y-3 rounded-xl border border-slate-700 bg-slate-950 p-4">
           <div className="flex items-center justify-between gap-3">
             <h4 className="font-semibold">
@@ -456,6 +520,58 @@ export default function TradeForm({
             {currentValidation.market} · {currentValidation.side} ·{" "}
             {currentValidation.currency}
           </p>
+
+          <div className="space-y-2 border-t border-slate-800 pt-3">
+            <h5 className="text-sm font-semibold">
+              Backend Order Preview
+            </h5>
+            <p className="text-sm text-slate-300">
+              Estimated asset cost:{" "}
+              {formatMoney(
+                orderPreview.estimatedAssetTotal,
+                orderPreview.assetCurrency
+              )}
+            </p>
+            <p className="text-sm text-slate-300">
+              Reference FX rate:{" "}
+              {orderPreview.fxRate.toFixed(6)}{" "}
+              {orderPreview.portfolioCurrency} per{" "}
+              {orderPreview.assetCurrency}
+            </p>
+            <p className="text-sm text-slate-300">
+              Estimated portfolio cost:{" "}
+              {formatMoney(
+                orderPreview.estimatedPortfolioTotal,
+                orderPreview.portfolioCurrency
+              )}
+            </p>
+            {type === "BUY" && (
+              <>
+                <p className="text-sm text-slate-300">
+                  Available cash:{" "}
+                  {formatMoney(
+                    orderPreview.availableCash,
+                    orderPreview.portfolioCurrency
+                  )}
+                </p>
+                <p
+                  className={
+                    orderPreview.sufficientCash
+                      ? "text-sm text-emerald-300"
+                      : "text-sm text-red-300"
+                  }
+                >
+                  Buying power:{" "}
+                  {orderPreview.sufficientCash
+                    ? "Sufficient"
+                    : "Insufficient"}
+                </p>
+              </>
+            )}
+            <p className="text-xs text-slate-500">
+              {orderPreview.disclaimer}
+            </p>
+          </div>
 
           {currentValidation.checks.map((check) => (
             <div key={check.code} className="border-t border-slate-800 pt-3">

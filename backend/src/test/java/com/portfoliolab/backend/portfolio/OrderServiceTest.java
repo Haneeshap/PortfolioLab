@@ -38,8 +38,7 @@ void setUp() {
             mock(AssetRepository.class),
             mock(HoldingRepository.class),
             mock(TransactionRepository.class),
-            mock(MarketService.class),
-            mock(FrankfurterRateService.class)
+            new OrderPricingService(mock(MarketService.class), mock(FrankfurterRateService.class))
     );
 }
 
@@ -117,8 +116,7 @@ void setUp() {
     FrankfurterRateService fx = mock(FrankfurterRateService.class);
 
     OrderService service = new OrderService(
-            portfolios, assets, holdings, transactions, market, fx
-    );
+            portfolios, assets, holdings, transactions, new OrderPricingService(market, fx));
 
     when(portfolios.findByIdForUpdate(1L))
             .thenReturn(Optional.of(portfolio));
@@ -186,8 +184,7 @@ void setUp() {
         FrankfurterRateService fx = mock(FrankfurterRateService.class);
 
         OrderService service = new OrderService(
-                portfolios, assets, holdings, transactions, market, fx
-        );
+                portfolios, assets, holdings, transactions, new OrderPricingService(market, fx));
 
         when(portfolios.findByIdForUpdate(1L))
                 .thenReturn(java.util.Optional.of(portfolio));
@@ -245,8 +242,7 @@ void setUp() {
         FrankfurterRateService fx = mock(FrankfurterRateService.class);
 
         OrderService service = new OrderService(
-                portfolios, assets, holdings, transactions, market, fx
-        );
+                portfolios, assets, holdings, transactions, new OrderPricingService(market, fx));
 
         when(portfolios.findByIdForUpdate(1L))
                 .thenReturn(java.util.Optional.of(portfolio));
@@ -314,8 +310,7 @@ void setUp() {
         FrankfurterRateService fx = mock(FrankfurterRateService.class);
 
         OrderService service = new OrderService(
-                portfolios, assets, holdings, transactions, market, fx
-        );
+                portfolios, assets, holdings, transactions, new OrderPricingService(market, fx));
 
         when(portfolios.findByIdForUpdate(1L))
                 .thenReturn(java.util.Optional.of(portfolio));

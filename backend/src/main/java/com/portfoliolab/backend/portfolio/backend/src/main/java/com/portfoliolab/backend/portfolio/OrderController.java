@@ -9,9 +9,14 @@ import org.springframework.web.bind.annotation.*;
 public class OrderController {
 
     private final OrderService orderService;
+    private final OrderPreviewService previewService;
 
-    public OrderController(OrderService orderService) {
+    public OrderController(
+            OrderService orderService,
+            OrderPreviewService previewService
+    ) {
         this.orderService = orderService;
+        this.previewService = previewService;
     }
 
     @PostMapping
@@ -21,5 +26,13 @@ public class OrderController {
             @RequestBody OrderRequest request
     ) {
         return orderService.placeOrder(portfolioId, request);
+    }
+
+    @PostMapping("/preview")
+    public OrderPreviewResponse previewOrder(
+            @PathVariable Long portfolioId,
+            @RequestBody OrderRequest request
+    ) {
+        return previewService.preview(portfolioId, request);
     }
 }
