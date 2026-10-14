@@ -12,6 +12,7 @@ const navigation = [
   { label: "FX Analytics", href: "/fx", icon: "⇄" },
   { label: "AI Agents", href: "/agents", icon: "✦" },
   { label: "Activity", href: "/activity", icon: "◷" },
+  { label: "Notifications", href: "/notifications", icon: "♧" },
 ];
 
 export default function AppShell({
