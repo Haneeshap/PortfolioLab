@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMarketPrices } from "./MarketPriceProvider";
 import type { Portfolio, Holding } from "./usePortfolioData";
+import { assessOrder } from "./orderAssessment";
 
 type Asset = {
   id: number;
@@ -148,6 +149,10 @@ export default function TradeForm({
     quantity,
     market: selectedMarket,
     price: quoteIsValid ? liveQuote?.price : null,
+    quoteUpdatedAt: liveQuote?.updatedAt ?? null,
+    quoteCurrency: liveQuote?.currency ?? null,
+    marketConnectionStatus: status,
+    quoteIsValid,
 
     portfolioCash: portfolio.cashBalance,
     portfolioCurrency: portfolio.currency,
@@ -157,14 +162,30 @@ export default function TradeForm({
   const [validatedKey, setValidatedKey] = useState<string | null>(null);
 
   const latestValidationKey = useRef(validationKey);
+  const validationAbortController = useRef<AbortController | null>(null);
 
   useLayoutEffect(() => {
-    latestValidationKey.current = validationKey;
-  }, [validationKey]);
+  latestValidationKey.current = validationKey;
+
+  validationAbortController.current?.abort();
+  validationAbortController.current = null;
+  setValidating(false);
+}, [validationKey]);
 
   const currentValidation = validation;
   const validationIsStale =
     validation !== null && validatedKey !== validationKey;
+
+  const orderAssessment =
+    currentValidation && orderPreview
+      ? assessOrder({
+          ruleStatus: currentValidation.overallStatus,
+          checks: currentValidation.checks,
+          side: currentValidation.side,
+          sufficientCash: orderPreview.sufficientCash,
+          stale: validationIsStale,
+        })
+      : null;
 
   async function validateOrder() {
     if (
@@ -186,6 +207,8 @@ export default function TradeForm({
     setValidationError(null);
 
     const requestKey = validationKey;
+    const controller = new AbortController();
+    validationAbortController.current = controller;
 
     const payload = {
       market: selectedMarket,
@@ -210,18 +233,19 @@ export default function TradeForm({
 
     try {
       const previewResponse = await fetch(
-        "/api/portfolio/orders/preview",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            assetId: selectedAsset.id,
-            type,
-            quantity: parsedQuantity,
-          }),
-          cache: "no-store",
-        }
-      );
+  "/api/portfolio/orders/preview",
+  {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      assetId: selectedAsset.id,
+      type,
+      quantity: parsedQuantity,
+    }),
+    cache: "no-store",
+    signal: controller.signal,
+  }
+);
 
       const previewData = await previewResponse.json();
 
@@ -254,13 +278,14 @@ export default function TradeForm({
       }
 
       const response = await fetch(
-        "/api/ai/agents/business-rules/evaluate",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        }
-      );
+  "/api/ai/agents/business-rules/evaluate",
+  {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal: controller.signal,
+  }
+);
 
       const data = await response.json();
 
@@ -284,8 +309,11 @@ export default function TradeForm({
         err instanceof Error ? err.message : "Unable to validate order."
       );
     } finally {
-      setValidating(false);
-    }
+  if (validationAbortController.current === controller) {
+    validationAbortController.current = null;
+    setValidating(false);
+  }
+}
   }
   async function submitTrade(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -505,14 +533,14 @@ export default function TradeForm({
             </h4>
             <span
               className={`rounded-full border px-3 py-1 text-xs font-semibold ${
-                currentValidation.overallStatus === "FAIL"
+                orderAssessment?.status === "NOT_READY"
                   ? "border-red-500/40 text-red-300"
-                  : currentValidation.overallStatus === "PASS"
+                  : orderAssessment?.status === "READY_FOR_SUBMISSION"
                     ? "border-emerald-500/40 text-emerald-300"
                     : "border-amber-500/40 text-amber-300"
               }`}
             >
-              {currentValidation.overallStatus}
+              {orderAssessment?.status.replaceAll("_", " ")}
             </span>
           </div>
 
@@ -520,6 +548,28 @@ export default function TradeForm({
             {currentValidation.market} · {currentValidation.side} ·{" "}
             {currentValidation.currency}
           </p>
+
+          {orderAssessment && (
+            <div className="space-y-2 rounded-lg border border-slate-700 bg-slate-900 p-3">
+              <p className="text-sm font-medium">
+                {orderAssessment.reason}
+              </p>
+              <p className="text-xs text-slate-400">
+                Business Rules Agent:{" "}
+                {currentValidation.overallStatus}
+              </p>
+              <p className="text-xs text-slate-400">
+                Buying power:{" "}
+                {currentValidation.side === "BUY"
+                  ? orderPreview.sufficientCash === true
+                    ? "Sufficient"
+                    : orderPreview.sufficientCash === false
+                      ? "Insufficient"
+                      : "Unknown"
+                  : "Not applicable to SELL"}
+              </p>
+            </div>
+          )}
 
           <div className="space-y-2 border-t border-slate-800 pt-3">
             <h5 className="text-sm font-semibold">
