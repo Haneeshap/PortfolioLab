@@ -2,6 +2,9 @@ package com.portfoliolab.backend.portfolio;
 
 import com.portfoliolab.backend.asset.Asset;
 import com.portfoliolab.backend.asset.AssetRepository;
+import com.portfoliolab.backend.notification.NotificationOutbox;
+import com.portfoliolab.backend.risk.PortfolioTradeCommitted;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,19 +21,25 @@ public class OrderService {
     private final HoldingRepository holdingRepository;
     private final TransactionRepository transactionRepository;
     private final OrderPricingService pricingService;
+    private final NotificationOutbox notificationOutbox;
+    private final ApplicationEventPublisher eventPublisher;
 
     public OrderService(
             PortfolioRepository portfolioRepository,
             AssetRepository assetRepository,
             HoldingRepository holdingRepository,
             TransactionRepository transactionRepository,
-            OrderPricingService pricingService
+            OrderPricingService pricingService,
+            NotificationOutbox notificationOutbox,
+            ApplicationEventPublisher eventPublisher
     ) {
         this.portfolioRepository = portfolioRepository;
         this.assetRepository = assetRepository;
         this.holdingRepository = holdingRepository;
         this.transactionRepository = transactionRepository;
         this.pricingService = pricingService;
+        this.notificationOutbox = notificationOutbox;
+        this.eventPublisher = eventPublisher;
     }
 
     @Transactional
@@ -109,7 +118,17 @@ public class OrderService {
                 portfolioAmount
         );
 
-        transactionRepository.save(transaction);
+        transactionRepository.saveAndFlush(transaction);
+
+        notificationOutbox.recordTrade(
+                portfolio.getId(),
+                transaction.getId(),
+                asset.getSymbol(),
+                type,
+                quantity
+        );
+
+        eventPublisher.publishEvent(new PortfolioTradeCommitted(portfolio.getId()));
 
         return new OrderResponse(
                 transaction.getId(),

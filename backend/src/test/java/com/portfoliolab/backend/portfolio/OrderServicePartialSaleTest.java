@@ -1,5 +1,7 @@
 package com.portfoliolab.backend.portfolio;
 
+
+import com.portfoliolab.backend.notification.NotificationOutbox;
 import com.portfoliolab.backend.asset.Asset;
 import com.portfoliolab.backend.asset.AssetRepository;
 import com.portfoliolab.backend.fx.FrankfurterRateService;
@@ -92,7 +94,7 @@ class OrderServicePartialSaleTest {
                 portfolios,
                 assets,
                 holdings,
-                transactions, new OrderPricingService(market, fx));
+                transactions, new OrderPricingService(market, fx), org.mockito.Mockito.mock(NotificationOutbox.class), org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
 
         OrderResponse response = service.placeOrder(
                 1L,
@@ -134,6 +136,6 @@ class OrderServicePartialSaleTest {
         );
 
         verify(holdings, never()).delete(any(Holding.class));
-        verify(transactions).save(any(Transaction.class));
+        verify(transactions).saveAndFlush(any(Transaction.class));
     }
 }

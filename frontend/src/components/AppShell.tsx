@@ -1,4 +1,5 @@
-﻿"use client";
+"use client";
+import NotificationBell from "./NotificationBell";
 import PortfolioChat from "./PortfolioChat";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -107,9 +108,12 @@ export default function AppShell({
             </div>
           </div>
 
-          <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-400">
-            Simulation
-          </span>
+          <div className="flex items-center gap-3">
+            <NotificationBell />
+            <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-400">
+              Simulation
+            </span>
+          </div>
         </header>
 
        <main className="mx-auto max-w-7xl space-y-8 px-5 py-8 sm:px-8">

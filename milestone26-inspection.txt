@@ -1,0 +1,446 @@
+=== SERVICES DIRECTORY ===
+C:\Users\hello\Projects\PortfolioLab\services\market-simulator\go.mod
+C:\Users\hello\Projects\PortfolioLab\services\market-simulator\go.sum
+C:\Users\hello\Projects\PortfolioLab\services\market-simulator\main.go
+C:\Users\hello\Projects\PortfolioLab\services\market-simulator\simulator.go
+C:\Users\hello\Projects\PortfolioLab\services\market-simulator\simulator_test.go
+
+=== backend\src\main\java\com\portfoliolab\backend\dividend\DividendSimulationService.java ===
+
+package com.portfoliolab.backend.dividend;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+
+import org.springframework.stereotype.Service;
+
+@Service
+public class DividendSimulationService {
+
+    public BigDecimal calculateGrossDividend(
+            BigDecimal eligibleShares,
+            BigDecimal dividendPerShare) {
+
+        if (eligibleShares == null || dividendPerShare == null) {
+            throw new IllegalArgumentException(
+                    "Share quantity and dividend per share are required"
+            );
+        }
+
+        if (eligibleShares.signum() < 0) {
+            throw new IllegalArgumentException(
+                    "Eligible shares cannot be negative"
+            );
+        }
+
+        if (dividendPerShare.signum() < 0) {
+            throw new IllegalArgumentException(
+                    "Dividend per share cannot be negative"
+            );
+        }
+
+        if (eligibleShares.stripTrailingZeros().scale() > 0) {
+            throw new IllegalArgumentException(
+                    "Eligible shares must be a whole number"
+            );
+        }
+
+        return eligibleShares
+                .multiply(dividendPerShare)
+                .setScale(2, RoundingMode.HALF_UP);
+    }
+}
+
+
+=== backend\src\main\java\com\portfoliolab\backend\dividend\DividendController.java ===
+
+package com.portfoliolab.backend.dividend;
+
+import java.math.BigDecimal;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/dividends")
+public class DividendController {
+
+    private static final Set<String> SUPPORTED_CURRENCIES =
+            Set.of("INR", "USD", "EUR");
+
+    private final DividendSimulationService service;
+
+    public DividendController(DividendSimulationService service) {
+        this.service = service;
+    }
+
+    @PostMapping("/simulate")
+    public DividendSimulationResponse simulate(
+            @RequestBody DividendSimulationRequest request) {
+
+        if (request == null) {
+            throw new IllegalArgumentException(
+                    "A simulation request is required"
+            );
+        }
+
+        String currency = request.currency() == null
+                ? ""
+                : request.currency().trim().toUpperCase(Locale.ROOT);
+
+        if (!SUPPORTED_CURRENCIES.contains(currency)) {
+            throw new IllegalArgumentException(
+                    "Currency must be INR, USD, or EUR"
+            );
+        }
+
+        BigDecimal grossDividend = service.calculateGrossDividend(
+                request.eligibleShares(),
+                request.dividendPerShare()
+        );
+
+        String calculation = request.eligibleShares()
+                + " shares × "
+                + request.dividendPerShare()
+                + " "
+                + currency
+                + " per share = "
+                + grossDividend
+                + " "
+                + currency;
+
+        return new DividendSimulationResponse(
+                request.eligibleShares(),
+                request.dividendPerShare(),
+                grossDividend,
+                currency,
+                calculation,
+                "Educational simulation only. Record-date eligibility, "
+                        + "taxes, and actual dividend payments are not determined."
+        );
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, String>> handleInvalidInput(
+            IllegalArgumentException exception) {
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(Map.of("error", exception.getMessage()));
+    }
+}
+
+
+=== backend\src\main\java\com\portfoliolab\backend\dividend\DividendSimulationRequest.java ===
+package com.portfoliolab.backend.dividend;
+
+import java.math.BigDecimal;
+
+public record DividendSimulationRequest(
+        BigDecimal eligibleShares,
+        BigDecimal dividendPerShare,
+        String currency
+) {
+}
+
+
+=== backend\src\main\java\com\portfoliolab\backend\dividend\DividendSimulationResponse.java ===
+
+package com.portfoliolab.backend.dividend;
+
+import java.math.BigDecimal;
+
+public record DividendSimulationResponse(
+        BigDecimal eligibleShares,
+        BigDecimal dividendPerShare,
+        BigDecimal grossDividend,
+        String currency,
+        String calculation,
+        String disclaimer
+) {
+}
+
+
+=== backend\src\main\java\com\portfoliolab\backend\notification\NotificationOutbox.java ===
+package com.portfoliolab.backend.notification;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Component;
+
+import java.math.BigDecimal;
+import java.util.Map;
+import java.util.UUID;
+
+@Component
+public class NotificationOutbox {
+
+    private final JdbcTemplate jdbc;
+    private final ObjectMapper mapper;
+
+    public NotificationOutbox(JdbcTemplate jdbc, ObjectMapper mapper) {
+        this.jdbc = jdbc;
+        this.mapper = mapper;
+    }
+
+    public void recordTrade(
+            Long portfolioId,
+            Long transactionId,
+            String symbol,
+            String side,
+            BigDecimal quantity
+    ) {
+        UUID eventId = UUID.randomUUID();
+
+        Map<String, Object> event = Map.of(
+                "eventId", eventId.toString(),
+                "eventType", "TRADE_EXECUTED",
+                "portfolioId", portfolioId,
+                "transactionId", transactionId,
+                "symbol", symbol,
+                "side", side,
+                "quantity", quantity
+        );
+
+        final String payload;
+
+        try {
+            payload = mapper.writeValueAsString(event);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException(
+                    "Unable to serialize trade notification event",
+                    exception
+            );
+        }
+
+        jdbc.update(
+                """
+                INSERT INTO notification_outbox
+                    (event_id, event_type, portfolio_id, payload)
+                VALUES (?, ?, ?, ?)
+                """,
+                eventId,
+                "TRADE_EXECUTED",
+                portfolioId,
+                payload
+        );
+    }
+}
+
+=== backend\src\main\java\com\portfoliolab\backend\notification\NotificationEventConsumer.java ===
+package com.portfoliolab.backend.notification;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.UUID;
+
+@Component
+public class NotificationEventConsumer {
+
+    private final JdbcTemplate jdbc;
+    private final ObjectMapper mapper;
+
+    public NotificationEventConsumer(
+            JdbcTemplate jdbc,
+            ObjectMapper mapper
+    ) {
+        this.jdbc = jdbc;
+        this.mapper = mapper;
+    }
+
+    @Transactional
+    @KafkaListener(topics = "portfoliolab.notifications.v1")
+    public void consume(String payload) throws Exception {
+
+        JsonNode event = mapper.readTree(payload);
+
+        if (!"TRADE_EXECUTED".equals(
+                event.path("eventType").asText()
+        )) {
+            throw new IllegalArgumentException(
+                    "Unsupported notification event type"
+            );
+        }
+
+        UUID eventId = UUID.fromString(
+                event.path("eventId").asText()
+        );
+
+        long portfolioId = event.path("portfolioId").asLong();
+        long transactionId = event.path("transactionId").asLong();
+
+        String symbol = event.path("symbol").asText();
+        String side = event.path("side").asText();
+        String quantity = event.path("quantity").asText();
+
+        if (portfolioId <= 0 || transactionId <= 0 ||
+                symbol.isBlank() || quantity.isBlank() ||
+                (!"BUY".equals(side) && !"SELL".equals(side))) {
+            throw new IllegalArgumentException(
+                    "Invalid trade notification payload"
+            );
+        }
+
+        String title = "Simulated trade executed";
+
+        String message = String.format(
+                "%s %s units of %s. Transaction #%d.",
+                "BUY".equals(side) ? "Bought" : "Sold",
+                quantity,
+                symbol,
+                transactionId
+        );
+
+        jdbc.update(
+                """
+                INSERT INTO notifications
+                    (event_id, portfolio_id, source, title,
+                     message, target_url)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT (event_id) DO NOTHING
+                """,
+                eventId,
+                portfolioId,
+                "TRADE",
+                title,
+                message,
+                "/portfolio"
+        );
+    }
+}
+
+=== backend\src\main\java\com\portfoliolab\backend\portfolio\Portfolio.java ===
+
+package com.portfoliolab.backend.portfolio;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+
+import java.math.BigDecimal;
+
+@Entity
+@Table(name = "portfolios")
+public class Portfolio {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false, length = 100)
+    private String name;
+
+    @Column(name = "cash_balance", nullable = false, precision = 19, scale = 4)
+    private BigDecimal cashBalance;
+
+    @Column(nullable = false, length = 3)
+    private String currency;
+
+    protected Portfolio() {
+        // Required by JPA
+    }
+
+    public Long getId() {
+        return id;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public BigDecimal getCashBalance() {
+        return cashBalance;
+    }
+
+    public String getCurrency() {
+        return currency;
+    }
+public void setCashBalance(BigDecimal cashBalance) {
+    if (cashBalance == null || cashBalance.signum() < 0) {
+        throw new IllegalArgumentException(
+                "Cash balance cannot be negative"
+        );
+    }
+
+    this.cashBalance = cashBalance;
+}
+}
+
+
+=== backend\src\main\java\com\portfoliolab\backend\portfolio\PortfolioService.java ===
+
+package com.portfoliolab.backend.portfolio;
+
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+
+import static org.springframework.http.HttpStatus.NOT_FOUND;
+
+@Service
+public class PortfolioService {
+
+    private final PortfolioRepository portfolioRepository;
+
+    public PortfolioService(PortfolioRepository portfolioRepository) {
+        this.portfolioRepository = portfolioRepository;
+    }
+
+    @Transactional(readOnly = true)
+    public PortfolioResponse getPortfolio(Long id) {
+        Portfolio portfolio = portfolioRepository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(
+                        NOT_FOUND,
+                        "Portfolio not found"
+                ));
+
+        return new PortfolioResponse(
+                portfolio.getId(),
+                portfolio.getName(),
+                portfolio.getCashBalance(),
+                portfolio.getCurrency()
+        );
+    }
+}
+
+
+=== backend\src\main\resources\db\migration\V9__create_notification_infrastructure.sql ===
+CREATE TABLE notification_outbox (
+    event_id UUID PRIMARY KEY,
+    event_type VARCHAR(80) NOT NULL,
+    portfolio_id BIGINT NOT NULL REFERENCES portfolios(id),
+    payload TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    published_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_notification_outbox_pending
+    ON notification_outbox (created_at, event_id)
+    WHERE published_at IS NULL;
+
+CREATE TABLE notifications (
+    id BIGSERIAL PRIMARY KEY,
+    event_id UUID NOT NULL UNIQUE,
+    portfolio_id BIGINT NOT NULL REFERENCES portfolios(id),
+    source VARCHAR(80) NOT NULL,
+    title VARCHAR(200) NOT NULL,
+    message TEXT NOT NULL,
+    target_url VARCHAR(300),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    read_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_notifications_portfolio_created
+    ON notifications (portfolio_id, created_at DESC, id DESC);
