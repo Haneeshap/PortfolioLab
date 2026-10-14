@@ -1,3 +1,4 @@
+
 package com.portfoliolab.backend.dividend;
 
 import java.math.BigDecimal;

@@ -1,3 +1,4 @@
+
 package com.portfoliolab.backend.dividend;
 
 import java.math.BigDecimal;
@@ -48,7 +49,7 @@ public class DividendController {
         );
 
         String calculation = request.eligibleShares()
-                + " shares x "
+                + " shares × "
                 + request.dividendPerShare()
                 + " "
                 + currency

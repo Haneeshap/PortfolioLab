@@ -135,7 +135,7 @@ export default function BonusAgent() {
         <button
           type="submit"
           disabled={loading}
-          className="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+          className="cursor-pointer rounded-lg bg-emerald-400 px-5 py-2.5 text-sm font-semibold text-slate-950 shadow-sm transition-all hover:bg-emerald-300 hover:shadow-md active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {loading ? "Simulating..." : "Simulate Bonus"}
         </button>
