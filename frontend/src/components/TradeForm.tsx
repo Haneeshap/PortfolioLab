@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useMarketPrices } from "./MarketPriceProvider";
 import type { Portfolio, Holding } from "./usePortfolioData";
 import { assessOrder, parseRuleResult } from "./orderAssessment";
@@ -66,7 +67,25 @@ export default function TradeForm({
 }: TradeFormProps) {
   const { prices, status } = useMarketPrices();
 
-  const [assetId, setAssetId] = useState("1");
+  const searchParams = useSearchParams();
+  const requestedAssetId = searchParams.get("assetId");
+
+  const initialAssetId =
+    requestedAssetId &&
+    assets.some((asset) => String(asset.id) === requestedAssetId)
+      ? requestedAssetId
+      : String(assets[0]?.id ?? "");
+
+  const [assetId, setAssetId] = useState(initialAssetId);
+
+  useEffect(() => {
+    if (
+      requestedAssetId &&
+      assets.some((asset) => String(asset.id) === requestedAssetId)
+    ) {
+      setAssetId(requestedAssetId);
+    }
+  }, [requestedAssetId, assets]);
   const [type, setType] = useState<"BUY" | "SELL">("BUY");
   const [quantity, setQuantity] = useState("1");
   const [submitting, setSubmitting] = useState(false);
@@ -355,8 +374,18 @@ setValidatedKey(requestKey);
 
       if (!response.ok) {
         const body = await response.text();
+
+        if (
+          response.status === 400 &&
+          body.includes("Insufficient virtual cash")
+        ) {
+          throw new Error(
+            "Insufficient simulated cash for this order. Reduce the quantity or choose a less expensive asset."
+          );
+        }
+
         throw new Error(
-          `Order rejected (${response.status}): ${body.slice(0, 300)}`
+          `Unable to execute this simulated order (${response.status}). Please review the order details and try again.`
         );
       }
 

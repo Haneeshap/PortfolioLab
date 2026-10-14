@@ -1,6 +1,6 @@
-﻿export const instant = false;
+export const instant = false;
+
 import AssetCatalog from "@/components/AssetCatalog";
-import LiveMarketPrices from "@/components/LiveMarketPrices";
 import { getAssets } from "@/app/assets";
 
 export default async function MarketsPage() {
@@ -9,8 +9,6 @@ export default async function MarketsPage() {
   return (
     <div className="space-y-6">
       <AssetCatalog assets={assets} />
-      <LiveMarketPrices />
     </div>
   );
 }
-
