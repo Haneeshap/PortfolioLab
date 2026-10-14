@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMarketPrices } from "./MarketPriceProvider";
+import type { Portfolio, Holding } from "./usePortfolioData";
 
 type Asset = {
   id: number;
@@ -13,9 +14,28 @@ type Asset = {
 
 type TradeFormProps = {
   assets: Asset[];
+  portfolio: Portfolio;
+  holdings: Holding[];
   onTradeCompleted: () => Promise<void>;
 };
 
+type Market = "NSE" | "BSE" | "NYSE" | "NASDAQ";
+type ValidationStatus = "PASS" | "FAIL" | "NEEDS_DATA";
+
+type RuleCheck = {
+  code: string;
+  status: ValidationStatus;
+  explanation: string;
+};
+
+type ValidationResult = {
+  market: Market;
+  currency: string;
+  side: "BUY" | "SELL";
+  overallStatus: ValidationStatus;
+  checks: RuleCheck[];
+  disclaimer: string;
+};
 type OrderResult = {
   pricePerUnit: number;
   totalAmount: number;
@@ -24,6 +44,8 @@ type OrderResult = {
 
 export default function TradeForm({
   assets,
+  portfolio,
+  holdings,
   onTradeCompleted,
 }: TradeFormProps) {
   const { prices, status } = useMarketPrices();
@@ -32,6 +54,10 @@ export default function TradeForm({
   const [type, setType] = useState<"BUY" | "SELL">("BUY");
   const [quantity, setQuantity] = useState("1");
   const [submitting, setSubmitting] = useState(false);
+  const [market, setMarket] = useState<Market>("NSE");
+  const [validating, setValidating] = useState(false);
+  const [validation, setValidation] = useState<ValidationResult | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -82,6 +108,121 @@ export default function TradeForm({
       currency,
     }).format(amount);
 
+  const marketOptions: Market[] =
+    selectedAsset?.currency === "INR"
+      ? ["NSE", "BSE"]
+      : selectedAsset?.currency === "USD"
+        ? ["NYSE", "NASDAQ"]
+        : [];
+
+  const selectedMarket: Market =
+    marketOptions.includes(market) ? market : marketOptions[0] ?? "NSE";
+
+  const matchingHolding = holdings.find(
+    (holding) => holding.assetId === selectedAsset?.id
+  );
+
+  const availableShares = matchingHolding?.quantity ?? 0;
+
+  const validationKey = JSON.stringify({
+    assetId: selectedAsset?.id,
+    type,
+    quantity,
+    market: selectedMarket,
+    price: quoteIsValid ? liveQuote?.price : null,
+
+    portfolioCash: portfolio.cashBalance,
+    portfolioCurrency: portfolio.currency,
+    availableShares,
+  });
+
+  const [validatedKey, setValidatedKey] = useState<string | null>(null);
+
+  const latestValidationKey = useRef(validationKey);
+
+  useLayoutEffect(() => {
+    latestValidationKey.current = validationKey;
+  }, [validationKey]);
+
+  const currentValidation = validation;
+  const validationIsStale =
+    validation !== null && validatedKey !== validationKey;
+
+  async function validateOrder() {
+    if (
+      validating ||
+      submitting ||
+      !selectedAsset ||
+      !validQuantity ||
+      !quoteIsValid ||
+      !liveQuote ||
+      marketOptions.length === 0
+    ) {
+      return;
+    }
+
+    setValidating(true);
+    setValidation(null);
+    setValidatedKey(null);
+    setValidationError(null);
+
+    const requestKey = validationKey;
+
+    const payload = {
+      market: selectedMarket,
+      side: type,
+      quantity: parsedQuantity,
+      price: liveQuote.price,
+      quantityIncrement: 1,
+      ...(type === "BUY"
+        ? {
+            ...(portfolio.currency === selectedAsset.currency
+              ? { availableCash: portfolio.cashBalance }
+              : {}),
+            // Charges are unknown until the execution cost model is checked.
+            // Omitting them intentionally produces NEEDS_DATA.
+          }
+        : {
+            availableShares: Number.isSafeInteger(availableShares)
+              ? availableShares
+              : undefined,
+          }),
+    };
+
+    try {
+      const response = await fetch(
+        "/api/ai/agents/business-rules/evaluate",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Validation failed.");
+      }
+
+      if (latestValidationKey.current !== requestKey) {
+        return;
+      }
+
+      setValidation(data.evaluation as ValidationResult);
+      setValidatedKey(requestKey);
+    } catch (err) {
+      if (latestValidationKey.current !== requestKey) {
+        return;
+      }
+
+      setValidationError(
+        err instanceof Error ? err.message : "Unable to validate order."
+      );
+    } finally {
+      setValidating(false);
+    }
+  }
   async function submitTrade(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -172,6 +313,28 @@ export default function TradeForm({
         </div>
 
         <div>
+          <label htmlFor="trade-market" className="mb-2 block text-sm">
+            Exchange for simulated validation
+          </label>
+          <select
+            id="trade-market"
+            value={selectedMarket}
+            onChange={(event) => setMarket(event.target.value as Market)}
+            disabled={submitting || validating || marketOptions.length === 0}
+            className="w-full rounded-lg border border-slate-700 bg-slate-950 p-3"
+          >
+            {marketOptions.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-slate-400">
+            Exchange selection is for hypothetical validation only.
+            PortfolioLab does not yet store exchange metadata per asset.
+          </p>
+        </div>
+        <div>
           <label htmlFor="trade-type" className="mb-2 block text-sm">
             Order Type
           </label>
@@ -228,6 +391,23 @@ export default function TradeForm({
           </p>
         )}
 
+        <div>
+          <button
+            type="button"
+            onClick={() => void validateOrder()}
+            disabled={
+              validating ||
+              submitting ||
+              !selectedAsset ||
+              !validQuantity ||
+              !quoteIsValid ||
+              marketOptions.length === 0
+            }
+            className="rounded-lg border border-emerald-400 px-6 py-3 font-semibold text-emerald-300 transition hover:bg-emerald-400/10 disabled:opacity-50"
+          >
+            {validating ? "Validating..." : "Validate Order"}
+          </button>
+        </div>
         <button
           type="submit"
           disabled={
@@ -242,6 +422,66 @@ export default function TradeForm({
         </button>
       </form>
 
+      {validationError && (
+        <p role="alert" className="mt-4 text-sm text-red-400">
+          {validationError}
+        </p>
+      )}
+
+      {currentValidation && (
+        <div className="mt-5 space-y-3 rounded-xl border border-slate-700 bg-slate-950 p-4">
+          <div className="flex items-center justify-between gap-3">
+            <h4 className="font-semibold">
+              Order Validation
+              {validationIsStale && (
+                <span className="ml-2 text-xs font-normal text-amber-300">
+                  (Outdated - validate again)
+                </span>
+              )}
+            </h4>
+            <span
+              className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                currentValidation.overallStatus === "FAIL"
+                  ? "border-red-500/40 text-red-300"
+                  : currentValidation.overallStatus === "PASS"
+                    ? "border-emerald-500/40 text-emerald-300"
+                    : "border-amber-500/40 text-amber-300"
+              }`}
+            >
+              {currentValidation.overallStatus}
+            </span>
+          </div>
+
+          <p className="text-xs text-slate-400">
+            {currentValidation.market} · {currentValidation.side} ·{" "}
+            {currentValidation.currency}
+          </p>
+
+          {currentValidation.checks.map((check) => (
+            <div key={check.code} className="border-t border-slate-800 pt-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium">
+                  {check.code.replaceAll("_", " ")}
+                </span>
+                <span className="text-xs font-semibold">
+                  {check.status}
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-slate-400">
+                {check.explanation}
+              </p>
+            </div>
+          ))}
+
+          <p className="text-xs leading-5 text-slate-500">
+            {currentValidation.disclaimer}
+          </p>
+          <p className="text-xs text-amber-300">
+            Validation is informational and does not reserve cash,
+            lock a price, or execute an order.
+          </p>
+        </div>
+      )}
       {message && (
         <p role="status" className="mt-4 text-sm text-emerald-400">
           {message}

@@ -52,6 +52,8 @@ export default function PortfolioHoldings({
 
       <TradeForm
         assets={assets}
+        portfolio={portfolio}
+        holdings={holdings}
         onTradeCompleted={refresh}
       />
 

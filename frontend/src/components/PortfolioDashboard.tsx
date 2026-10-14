@@ -48,9 +48,11 @@ export default function PortfolioDashboard({
 
   return (    <section className="space-y-6">
         <TradeForm
-  assets={assets}
-  onTradeCompleted={refresh}
-/>
+          assets={assets}
+          portfolio={portfolio}
+          holdings={valuedHoldings}
+          onTradeCompleted={refresh}
+        />
       <div>
         <h2 className="text-2xl font-semibold">My Portfolio</h2>
         <p className="text-sm text-gray-500">
