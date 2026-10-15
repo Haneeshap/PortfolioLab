@@ -1,0 +1,1749 @@
+﻿===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\businessrules\MarketRulesController.java =====
+package com.portfoliolab.backend.businessrules;
+
+import java.util.Map;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/business-rules")
+public class MarketRulesController {
+
+    private final MarketRulesService service;
+
+    public MarketRulesController(MarketRulesService service) {
+        this.service = service;
+    }
+
+    @PostMapping("/evaluate")
+    public MarketRulesService.Evaluation evaluate(
+            @RequestBody MarketRulesRequest request) {
+
+        return service.evaluate(
+                request.market(),
+                request.side(),
+                request.quantity(),
+                request.price(),
+                request.availableCash(),
+                request.availableShares(),
+                request.estimatedCharges(),
+                request.lowerPriceLimit(),
+                request.upperPriceLimit(),
+                request.quantityIncrement()
+        );
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, String>> handleInvalidInput(
+            IllegalArgumentException exception) {
+
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(Map.of("error", exception.getMessage()));
+    }
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\businessrules\MarketRulesRequest.java =====
+package com.portfoliolab.backend.businessrules;
+
+import java.math.BigDecimal;
+
+public record MarketRulesRequest(
+        String market,
+        String side,
+        long quantity,
+        BigDecimal price,
+        BigDecimal availableCash,
+        Long availableShares,
+        BigDecimal estimatedCharges,
+        BigDecimal lowerPriceLimit,
+        BigDecimal upperPriceLimit,
+        Long quantityIncrement
+) {}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\businessrules\MarketRulesService.java =====
+package com.portfoliolab.backend.businessrules;
+
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
+import org.springframework.stereotype.Service;
+
+@Service
+public class MarketRulesService {
+
+    public record RuleCheck(
+            String code,
+            String status,
+            String explanation
+    ) {}
+
+    public record Evaluation(
+            String market,
+            String currency,
+            String side,
+            String overallStatus,
+            List<RuleCheck> checks,
+            String disclaimer
+    ) {}
+
+    public Evaluation evaluate(
+            String market,
+            String side,
+            long quantity,
+            BigDecimal price,
+            BigDecimal availableCash,
+            Long availableShares,
+            BigDecimal estimatedCharges,
+            BigDecimal lowerPriceLimit,
+            BigDecimal upperPriceLimit,
+            Long quantityIncrement) {
+
+        if (!List.of("NSE", "BSE", "NYSE", "NASDAQ").contains(market)) {
+            throw new IllegalArgumentException("Unsupported market");
+        }
+
+        if (!List.of("BUY", "SELL").contains(side)) {
+            throw new IllegalArgumentException("Unsupported transaction side");
+        }
+
+        if (quantity <= 0 || price == null ||
+                price.signum() <= 0) {
+            throw new IllegalArgumentException(
+                    "Quantity and price must be positive");
+        }
+
+        if (availableCash != null && availableCash.signum() < 0 ||
+                availableShares != null && availableShares < 0 ||
+                estimatedCharges != null && estimatedCharges.signum() < 0 ||
+                quantityIncrement != null && quantityIncrement <= 0) {
+            throw new IllegalArgumentException("Invalid simulation input");
+        }
+
+        if (lowerPriceLimit != null && lowerPriceLimit.signum() <= 0 ||
+                upperPriceLimit != null && upperPriceLimit.signum() <= 0 ||
+                lowerPriceLimit != null && upperPriceLimit != null &&
+                lowerPriceLimit.compareTo(upperPriceLimit) > 0) {
+            throw new IllegalArgumentException("Invalid price limits");
+        }
+
+        String currency = List.of("NSE", "BSE").contains(market)
+                ? "INR" : "USD";
+
+        List<RuleCheck> checks = new ArrayList<>();
+
+        if ("BUY".equals(side)) {
+            if (availableCash == null || estimatedCharges == null) {
+                checks.add(new RuleCheck(
+                        "BUYING_POWER", "NEEDS_DATA",
+                        "Available cash and estimated charges are required."
+                ));
+            } else {
+                BigDecimal required = price
+                        .multiply(BigDecimal.valueOf(quantity))
+                        .add(estimatedCharges);
+
+                boolean passes = availableCash.compareTo(required) >= 0;
+
+                checks.add(new RuleCheck(
+                        "BUYING_POWER",
+                        passes ? "PASS" : "FAIL",
+                        "Required " + currency + " " + required
+                                + "; available " + currency + " "
+                                + availableCash + "."
+                ));
+            }
+        } else {
+            if (availableShares == null) {
+                checks.add(new RuleCheck(
+                        "SELL_AVAILABILITY", "NEEDS_DATA",
+                        "Available delivery shares are required."
+                ));
+            } else {
+                checks.add(new RuleCheck(
+                        "SELL_AVAILABILITY",
+                        availableShares >= quantity ? "PASS" : "FAIL",
+                        "Requested " + quantity
+                                + " shares; available "
+                                + availableShares + "."
+                ));
+            }
+        }
+
+        if (lowerPriceLimit == null || upperPriceLimit == null) {
+            checks.add(new RuleCheck(
+                    "PRICE_RESTRICTIONS", "NEEDS_DATA",
+                    "Applicable security-specific price restrictions "
+                            + "have not been supplied."
+            ));
+        } else {
+            boolean passes =
+                    price.compareTo(lowerPriceLimit) >= 0 &&
+                    price.compareTo(upperPriceLimit) <= 0;
+
+            checks.add(new RuleCheck(
+                    "PRICE_RESTRICTIONS",
+                    passes ? "PASS" : "FAIL",
+                    "Order price " + price
+                            + "; supplied permitted range "
+                            + lowerPriceLimit + " to "
+                            + upperPriceLimit + "."
+            ));
+        }
+
+        long increment = quantityIncrement == null ? 1 : quantityIncrement;
+
+        checks.add(new RuleCheck(
+                "QUANTITY_INCREMENT",
+                quantity % increment == 0 ? "PASS" : "FAIL",
+                "Quantity must be a multiple of " + increment
+                        + " for this simulated instrument."
+        ));
+
+        boolean failed = checks.stream()
+                .anyMatch(c -> "FAIL".equals(c.status()));
+
+        boolean missing = checks.stream()
+                .anyMatch(c -> "NEEDS_DATA".equals(c.status()));
+
+        String overall = failed ? "FAIL" :
+                missing ? "NEEDS_DATA" : "PASS";
+
+        return new Evaluation(
+                market,
+                currency,
+                side,
+                overall,
+                List.copyOf(checks),
+                "Educational simulation only. These checks do not "
+                        + "verify live exchange rules, trading halts, "
+                        + "broker restrictions, or actual order eligibility."
+        );
+    }
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\history\PortfolioHistoryRecorder.java =====
+package com.portfoliolab.backend.history;
+
+import com.portfoliolab.backend.market.MarketPrice;
+import com.portfoliolab.backend.market.MarketService;
+import com.portfoliolab.backend.portfolio.Holding;
+import com.portfoliolab.backend.portfolio.HoldingRepository;
+import com.portfoliolab.backend.portfolio.Portfolio;
+import com.portfoliolab.backend.portfolio.PortfolioRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+@Service
+public class PortfolioHistoryRecorder {
+    private static final Logger log =
+            LoggerFactory.getLogger(PortfolioHistoryRecorder.class);
+
+    private final PortfolioRepository portfolios;
+    private final HoldingRepository holdings;
+    private final MarketService market;
+    private final JdbcTemplate jdbc;
+
+    public PortfolioHistoryRecorder(
+            PortfolioRepository portfolios,
+            HoldingRepository holdings,
+            MarketService market,
+            JdbcTemplate jdbc
+    ) {
+        this.portfolios = portfolios;
+        this.holdings = holdings;
+        this.market = market;
+        this.jdbc = jdbc;
+    }
+
+    @Scheduled(fixedDelay = 30000, initialDelay = 5000)
+    public void record() {
+        List<Portfolio> allPortfolios = portfolios.findAll();
+
+        if (allPortfolios.isEmpty()) {
+            return;
+        }
+
+        Map<String, MarketPrice> quotes;
+        try {
+            quotes = market.getCurrentPrices().stream()
+                    .collect(Collectors.toMap(
+                            MarketPrice::symbol,
+                            Function.identity(),
+                            (first, second) -> second
+                    ));
+        } catch (Exception exception) {
+            log.warn("Skipping history snapshot: market unavailable");
+            return;
+        }
+
+        for (Portfolio portfolio : allPortfolios) {
+            try {
+                recordPortfolio(portfolio, quotes);
+            } catch (Exception exception) {
+                log.warn(
+                        "Could not record portfolio {}: {}",
+                        portfolio.getId(),
+                        exception.getMessage()
+                );
+            }
+        }
+    }
+
+    private void recordPortfolio(
+            Portfolio portfolio,
+            Map<String, MarketPrice> quotes
+    ) {
+        List<Holding> positions =
+                holdings.findByPortfolioId(portfolio.getId());
+
+        BigDecimal holdingsValue = BigDecimal.ZERO;
+
+        for (Holding holding : positions) {
+            String symbol = holding.getAsset().getSymbol();
+            String currency = holding.getAsset().getCurrency();
+
+            MarketPrice quote = quotes.get(symbol);
+
+            if (quote == null
+                    || quote.price() == null
+                    || quote.price().signum() <= 0
+                    || !currency.equals(quote.currency())
+                    || !portfolio.getCurrency().equals(currency)) {
+                log.warn(
+                        "Skipping snapshot for portfolio {}: invalid or missing quote for {}",
+                        portfolio.getId(),
+                        symbol
+                );
+                return;
+            }
+
+            holdingsValue = holdingsValue.add(
+                    holding.getQuantity().multiply(quote.price())
+            );
+        }
+
+        BigDecimal cash = portfolio.getCashBalance();
+        BigDecimal total = cash.add(holdingsValue);
+
+        jdbc.update("""
+                INSERT INTO portfolio_snapshots
+                (portfolio_id, cash_balance, holdings_value,
+                 total_value, currency, valuation_source)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                portfolio.getId(),
+                cash,
+                holdingsValue.setScale(4, RoundingMode.HALF_UP),
+                total.setScale(4, RoundingMode.HALF_UP),
+                portfolio.getCurrency(),
+                "GO_SIMULATOR"
+        );
+    }
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\market\MarketController.java =====
+
+package com.portfoliolab.backend.market;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/market")
+public class MarketController {
+
+    private final MarketService marketService;
+
+    public MarketController(MarketService marketService) {
+        this.marketService = marketService;
+    }
+
+    @GetMapping("/prices")
+    public List<MarketPrice> getPrices() {
+        return marketService.getCurrentPrices();
+    }
+
+    @ExceptionHandler(MarketServiceUnavailableException.class)
+    public ResponseEntity<Map<String, String>> handleUnavailable(
+            MarketServiceUnavailableException exception
+    ) {
+        return ResponseEntity
+                .status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(Map.of(
+                        "error", "Market simulator unavailable"
+                ));
+    }
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\market\MarketIntelligenceController.java =====
+package com.portfoliolab.backend.market;
+import java.util.List;
+import java.util.Map;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+@RestController
+@RequestMapping("/api/market/intelligence")
+public class MarketIntelligenceController {
+ private final MarketIntelligenceService service;
+ public MarketIntelligenceController(MarketIntelligenceService service){this.service=service;}
+ @GetMapping public List<MarketIntelligenceService.IntelligenceEvent> feed(
+  @RequestParam(defaultValue="1") long portfolioId,
+  @RequestParam(defaultValue="all") String scope,
+  @RequestParam(defaultValue="all") String type,
+  @RequestParam(defaultValue="50") int limit){return service.feed(portfolioId,scope,type,limit);}
+ @ExceptionHandler(IllegalArgumentException.class)
+ public ResponseEntity<Map<String,String>> invalid(IllegalArgumentException e){return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error",e.getMessage()));}
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\market\MarketIntelligenceService.java =====
+package com.portfoliolab.backend.market;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.Instant;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+
+@Service
+public class MarketIntelligenceService {
+ private static final Logger log=LoggerFactory.getLogger(MarketIntelligenceService.class);
+ private final JdbcTemplate jdbc;
+ private final MarketService market;
+ private final ObjectMapper mapper;
+ private final TransactionTemplate tx;
+ public MarketIntelligenceService(JdbcTemplate jdbc, MarketService market, ObjectMapper mapper, PlatformTransactionManager manager) {
+  this.jdbc=jdbc; this.market=market; this.mapper=mapper; this.tx=new TransactionTemplate(manager);
+ }
+ public record IntelligenceEvent(long id,String symbol,String currency,String eventType,int windowSeconds,
+  BigDecimal startPrice,BigDecimal endPrice,BigDecimal changePercent,String headline,String explanation,Instant createdAt) {}
+ private final org.springframework.jdbc.core.RowMapper<IntelligenceEvent> row=(rs,n)->new IntelligenceEvent(
+  rs.getLong("id"),rs.getString("symbol"),rs.getString("currency"),rs.getString("event_type"),
+  rs.getInt("window_seconds"),rs.getBigDecimal("start_price"),rs.getBigDecimal("end_price"),
+  rs.getBigDecimal("change_percent"),rs.getString("headline"),rs.getString("explanation"),
+  rs.getTimestamp("created_at").toInstant());
+
+ public List<IntelligenceEvent> feed(long portfolioId,String scope,String type,int requestedLimit) {
+  Integer exists=jdbc.queryForObject("SELECT count(*) FROM portfolios WHERE id=?",Integer.class,portfolioId);
+  if(exists==null||exists==0) throw new IllegalArgumentException("Portfolio not found");
+  String s=scope==null?"all":scope.toLowerCase(Locale.ROOT);
+  String t=type==null?"all":type.toUpperCase(Locale.ROOT);
+  if(!List.of("all","watchlist").contains(s)) throw new IllegalArgumentException("Invalid scope");
+  if(!List.of("ALL","SURGE","DROP").contains(t)) throw new IllegalArgumentException("Invalid event type");
+  int limit=Math.min(100,Math.max(1,requestedLimit));
+  return jdbc.query("""
+   SELECT e.* FROM market_intelligence_events e
+   WHERE (?='ALL' OR e.event_type=?)
+   AND (?='all' OR EXISTS (
+    SELECT 1 FROM watchlists w JOIN watchlist_items wi ON wi.watchlist_id=w.id
+    JOIN assets a ON a.id=wi.asset_id
+    WHERE w.portfolio_id=? AND a.symbol=e.symbol))
+   ORDER BY e.created_at DESC,e.id DESC LIMIT ?
+   """,row,t,t,s,portfolioId,limit);
+ }
+
+ @Scheduled(fixedDelay=5000,initialDelay=12000)
+ public void observe() {
+  List<MarketPrice> quotes;
+  try {quotes=market.getCurrentPrices();} catch(Exception e){return;}
+  try {
+   tx.executeWithoutResult(status->{
+    for(MarketPrice q:quotes){
+     if(q.price()==null||q.price().signum()<=0||q.symbol()==null||q.currency()==null)continue;
+     BigDecimal current=q.price().setScale(4,RoundingMode.HALF_UP);
+     // One coherent DB observation batch, rather than independent browser polling.
+     jdbc.update("INSERT INTO market_price_samples(symbol,currency,price) VALUES(?,?,?)",q.symbol(),q.currency(),current);
+     check(q.symbol(),q.currency(),current,60,new BigDecimal("3.0"));
+     check(q.symbol(),q.currency(),current,300,new BigDecimal("6.0"));
+    }
+   });
+  } catch(Exception e){log.warn("Market intelligence observation failed",e);}
+ }
+ private void check(String symbol,String currency,BigDecimal current,int seconds,BigDecimal threshold){
+  // Nearest sample around the beginning of the window (Â±15s).
+  List<BigDecimal> candidates=jdbc.query("""
+   SELECT price FROM market_price_samples WHERE symbol=? AND currency=?
+   AND observed_at BETWEEN NOW() - (? * INTERVAL '1 second') - INTERVAL '15 seconds'
+                       AND NOW() - (? * INTERVAL '1 second') + INTERVAL '15 seconds'
+   ORDER BY ABS(EXTRACT(EPOCH FROM (observed_at-(NOW()-(? * INTERVAL '1 second'))))) ASC,id ASC LIMIT 1
+   """,(rs,n)->rs.getBigDecimal(1),symbol,currency,seconds,seconds,seconds);
+  if(candidates.isEmpty()||candidates.get(0).signum()<=0)return;
+  BigDecimal start=candidates.get(0);
+  BigDecimal percent=current.subtract(start).multiply(new BigDecimal("100"))
+    .divide(start,4,RoundingMode.HALF_UP);
+  if(percent.abs().compareTo(threshold)<0)return;
+  String type=percent.signum()>0?"SURGE":"DROP";
+  // Suppress repeats across observation windows for the same asset/direction.
+  Integer recent=jdbc.queryForObject("""
+   SELECT count(*) FROM market_intelligence_events WHERE symbol=? AND event_type=?
+   AND created_at > NOW()-INTERVAL '10 minutes'
+   """,Integer.class,symbol,type);
+  if(recent!=null&&recent>0)return;
+  String window=seconds==60?"1 minute":"5 minutes";
+  String headline=symbol+(percent.signum()>0?" rises sharply":" falls sharply")+" in simulated trading";
+  String explanation=String.format(Locale.ROOT,
+   "%s moved %s%% over %s, from %s to %s %s. Flagged because the absolute move exceeded %s%%. All prices are simulated.",
+   symbol,percent.toPlainString(),window,start.toPlainString(),current.toPlainString(),currency,threshold.toPlainString());
+  Long id=jdbc.queryForObject("""
+   INSERT INTO market_intelligence_events(symbol,currency,event_type,window_seconds,start_price,end_price,change_percent,headline,explanation)
+   VALUES(?,?,?,?,?,?,?,?,?) RETURNING id
+   """,Long.class,symbol,currency,type,seconds,start,current,percent,headline,explanation);
+  try {
+   String payload=mapper.writeValueAsString(Map.of("eventType","MARKET_INTELLIGENCE","intelligenceId",id,
+    "symbol",symbol,"currency",currency,"direction",type,"windowSeconds",seconds,
+    "changePercent",percent,"headline",headline,"explanation",explanation));
+   jdbc.update("INSERT INTO market_intelligence_outbox(intelligence_id,payload) VALUES(?,?)",id,payload);
+  } catch(Exception e){throw new IllegalStateException("Unable to serialize market intelligence event",e);}
+ }
+ @Scheduled(fixedDelay=3600000,initialDelay=3600000)
+ public void pruneSamples(){jdbc.update("DELETE FROM market_price_samples WHERE observed_at < NOW()-INTERVAL '24 hours'");}
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\market\MarketPrice.java =====
+
+package com.portfoliolab.backend.market;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+
+public record MarketPrice(
+        String symbol,
+        BigDecimal price,
+        String currency,
+        Instant updatedAt
+) {
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\market\MarketService.java =====
+
+package com.portfoliolab.backend.market;
+
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
+
+import java.util.Arrays;
+import java.util.List;
+
+@Service
+public class MarketService {
+
+    private final RestClient restClient;
+
+    public MarketService() {
+    this.restClient = RestClient.builder()
+            .baseUrl("http://127.0.0.1:8081")
+            .build();
+}
+    public List<MarketPrice> getCurrentPrices() {
+        try {
+            MarketPrice[] prices = restClient.get()
+                    .uri("/prices")
+                    .retrieve()
+                    .body(MarketPrice[].class);
+
+            if (prices == null) {
+                throw new IllegalStateException(
+                        "Market simulator returned an empty response"
+                );
+            }
+
+            return Arrays.asList(prices);
+
+        } catch (RestClientException exception) {
+            throw new MarketServiceUnavailableException(
+                    "Unable to retrieve simulated market prices",
+                    exception
+            );
+        }
+    }
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\market\MarketServiceUnavailableException.java =====
+
+package com.portfoliolab.backend.market;
+
+public class MarketServiceUnavailableException extends RuntimeException {
+
+    public MarketServiceUnavailableException(
+            String message,
+            Throwable cause
+    ) {
+        super(message, cause);
+    }
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\notification\MarketIntelligenceOutboxPublisher.java =====
+package com.portfoliolab.backend.notification;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+@Component
+public class MarketIntelligenceOutboxPublisher {
+ private static final Logger log=LoggerFactory.getLogger(MarketIntelligenceOutboxPublisher.class);
+ private final JdbcTemplate jdbc;
+ private final KafkaTemplate<String,String> kafka;
+ public MarketIntelligenceOutboxPublisher(JdbcTemplate jdbc,KafkaTemplate<String,String> kafka){this.jdbc=jdbc;this.kafka=kafka;}
+ record Pending(long id,long intelligenceId,String payload){}
+ @Scheduled(fixedDelay=3000,initialDelay=15000)
+ public void publish(){
+  List<Pending> events=jdbc.query("SELECT event_id,intelligence_id,payload FROM market_intelligence_outbox WHERE published_at IS NULL ORDER BY event_id LIMIT 25",
+   (rs,n)->new Pending(rs.getLong(1),rs.getLong(2),rs.getString(3)));
+  for(Pending e:events){
+   try{
+    kafka.send("portfoliolab.market-intelligence.v1",Long.toString(e.intelligenceId()),e.payload()).get(10,TimeUnit.SECONDS);
+    jdbc.update("UPDATE market_intelligence_outbox SET published_at=NOW() WHERE event_id=? AND published_at IS NULL",e.id());
+   }catch(Exception ex){log.warn("Market intelligence Kafka delivery failed; will retry",ex);break;}
+  }
+ }
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\portfolio\HoldingResponse.java =====
+package com.portfoliolab.backend.portfolio;
+
+import java.math.BigDecimal;
+
+public record HoldingResponse(
+        Long assetId,
+        String symbol,
+        String name,
+        BigDecimal quantity,
+        BigDecimal averageBuyPrice,
+        BigDecimal currentPrice,
+        BigDecimal marketValue,
+        BigDecimal unrealizedProfitLoss,
+        String currency,
+        BigDecimal currentFxRate,
+        BigDecimal marketValueInPortfolioCurrency,
+        String portfolioCurrency,
+        BigDecimal historicalCostInPortfolioCurrency,
+        BigDecimal unrealizedProfitLossInPortfolioCurrency
+) {
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\portfolio\OrderRequest.java =====
+package com.portfoliolab.backend.portfolio;
+
+import java.math.BigDecimal;
+
+public record OrderRequest(
+        Long assetId,
+        String type,
+        BigDecimal quantity
+) {
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\portfolio\OrderResponse.java =====
+package com.portfoliolab.backend.portfolio;
+
+import java.math.BigDecimal;
+
+public record OrderResponse(
+        Long transactionId,
+        Long portfolioId,
+        String assetSymbol,
+        String type,
+        BigDecimal quantity,
+        BigDecimal pricePerUnit,
+        BigDecimal totalAmount,
+        String currency,
+        BigDecimal executionFxRate,
+        BigDecimal portfolioAmount,
+        String portfolioCurrency,
+        BigDecimal remainingCashBalance
+) {
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\portfolio\Transaction.java =====
+package com.portfoliolab.backend.portfolio;
+
+import com.portfoliolab.backend.asset.Asset;
+import jakarta.persistence.*;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+
+@Entity
+@Table(name = "transactions")
+public class Transaction {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "portfolio_id", nullable = false)
+    private Portfolio portfolio;
+
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "asset_id", nullable = false)
+    private Asset asset;
+
+    @Column(name = "transaction_type", nullable = false, length = 4)
+    private String transactionType;
+
+    @Column(nullable = false, precision = 19, scale = 6)
+    private BigDecimal quantity;
+
+    @Column(name = "price_per_unit", nullable = false, precision = 19, scale = 4)
+    private BigDecimal pricePerUnit;
+
+    @Column(name = "total_amount", nullable = false, precision = 19, scale = 4)
+    private BigDecimal totalAmount;
+
+    @Column(name = "execution_fx_rate", nullable = false, precision = 19, scale = 8)
+private BigDecimal executionFxRate;
+
+@Column(name = "portfolio_amount", nullable = false, precision = 19, scale = 4)
+private BigDecimal portfolioAmount;
+
+    @Column(nullable = false, length = 3)
+    private String currency;
+
+    @Column(name = "created_at", nullable = false, insertable = false, updatable = false)
+    private Instant createdAt;
+
+    protected Transaction() {
+    }
+
+   public Transaction(
+        Portfolio portfolio,
+        Asset asset,
+        String transactionType,
+        BigDecimal quantity,
+        BigDecimal pricePerUnit,
+        BigDecimal totalAmount,
+        String currency,
+        BigDecimal executionFxRate,
+        BigDecimal portfolioAmount
+) {
+    this.portfolio = portfolio;
+    this.asset = asset;
+    this.transactionType = transactionType;
+    this.quantity = quantity;
+    this.pricePerUnit = pricePerUnit;
+    this.totalAmount = totalAmount;
+    this.currency = currency;
+    this.executionFxRate = executionFxRate;
+    this.portfolioAmount = portfolioAmount;
+}
+
+    public Long getId() {
+        return id;
+    }
+
+    public Portfolio getPortfolio() {
+        return portfolio;
+    }
+
+    public Asset getAsset() {
+        return asset;
+    }
+
+    public String getTransactionType() {
+        return transactionType;
+    }
+
+    public BigDecimal getQuantity() {
+        return quantity;
+    }
+
+    public BigDecimal getPricePerUnit() {
+        return pricePerUnit;
+    }
+
+    public BigDecimal getTotalAmount() {
+        return totalAmount;
+    }
+
+    public String getCurrency() {
+        return currency;
+    }
+
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+public BigDecimal getExecutionFxRate() {
+    return executionFxRate;
+}
+
+public BigDecimal getPortfolioAmount() {
+    return portfolioAmount;
+}
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\portfolio\TransactionRepository.java =====
+package com.portfoliolab.backend.portfolio;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.List;
+
+public interface TransactionRepository
+        extends JpaRepository<Transaction, Long> {
+
+    List<Transaction> findByPortfolioIdOrderByCreatedAtDesc(
+            Long portfolioId
+    );
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\portfolio\TransactionResponse.java =====
+package com.portfoliolab.backend.portfolio;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+
+public record TransactionResponse(
+        Long id,
+        String assetSymbol,
+        String type,
+        BigDecimal quantity,
+        BigDecimal pricePerUnit,
+        BigDecimal totalAmount,
+        String currency,
+        Instant createdAt
+) {
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\portfolio\backend\src\main\java\com\portfoliolab\backend\portfolio\Holding.java =====
+
+package com.portfoliolab.backend.portfolio;
+
+import com.portfoliolab.backend.asset.Asset;
+import jakarta.persistence.*;
+
+import java.math.BigDecimal;
+
+@Entity
+@Table(
+    name = "holdings",
+    uniqueConstraints = @UniqueConstraint(
+        columnNames = {"portfolio_id", "asset_id"}
+    )
+)
+public class Holding {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "portfolio_id", nullable = false)
+    private Portfolio portfolio;
+
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "asset_id", nullable = false)
+    private Asset asset;
+
+    @Column(nullable = false, precision = 19, scale = 6)
+    private BigDecimal quantity;
+
+    @Column(
+        name = "average_buy_price",
+        nullable = false,
+        precision = 19,
+        scale = 4
+    )
+    private BigDecimal averageBuyPrice;
+
+    @Column(
+        name = "historical_cost_portfolio",
+        nullable = false,
+        precision = 19,
+        scale = 4
+    )
+    private BigDecimal historicalCostPortfolio;
+
+    protected Holding() {
+    }
+
+    public Holding(
+            Portfolio portfolio,
+            Asset asset,
+            BigDecimal quantity,
+            BigDecimal averageBuyPrice
+    ) {
+        this.portfolio = portfolio;
+        this.asset = asset;
+        this.quantity = quantity;
+        this.averageBuyPrice = averageBuyPrice;
+        this.historicalCostPortfolio = quantity
+                .multiply(averageBuyPrice)
+                .setScale(4, java.math.RoundingMode.HALF_UP);
+    }
+
+    public BigDecimal getHistoricalCostPortfolio() {
+        return historicalCostPortfolio;
+    }
+
+    public void setHistoricalCostPortfolio(BigDecimal value) {
+        if (value == null || value.signum() < 0) {
+            throw new IllegalArgumentException(
+                "Historical cost must be nonnegative"
+            );
+        }
+        this.historicalCostPortfolio = value.setScale(
+                4, java.math.RoundingMode.HALF_UP
+        );
+    }
+
+    public Long getId() {
+        return id;
+    }
+
+    public Portfolio getPortfolio() {
+        return portfolio;
+    }
+
+    public Asset getAsset() {
+        return asset;
+    }
+
+    public BigDecimal getQuantity() {
+        return quantity;
+    }
+
+    public BigDecimal getAverageBuyPrice() {
+        return averageBuyPrice;
+    }
+
+    public void updatePosition(
+            BigDecimal quantity,
+            BigDecimal averageBuyPrice
+    ) {
+        if (quantity == null || quantity.signum() <= 0) {
+            throw new IllegalArgumentException(
+                "Holding quantity must be positive"
+            );
+        }
+
+        if (averageBuyPrice == null ||
+                averageBuyPrice.signum() < 0) {
+            throw new IllegalArgumentException(
+                "Average buy price cannot be negative"
+            );
+        }
+
+        this.quantity = quantity;
+        this.averageBuyPrice = averageBuyPrice;
+    }
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\portfolio\backend\src\main\java\com\portfoliolab\backend\portfolio\HoldingRepository.java =====
+package com.portfoliolab.backend.portfolio;
+
+import org.springframework.data.jpa.repository.EntityGraph;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.List;
+import java.util.Optional;
+
+public interface HoldingRepository extends JpaRepository<Holding, Long> {
+
+    @EntityGraph(attributePaths = {"asset"})
+    List<Holding> findByPortfolioId(Long portfolioId);
+
+    Optional<Holding> findByPortfolioIdAndAssetId(
+            Long portfolioId,
+            Long assetId
+    );
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\portfolio\backend\src\main\java\com\portfoliolab\backend\portfolio\OrderController.java =====
+
+package com.portfoliolab.backend.portfolio;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/portfolios/{portfolioId}/orders")
+public class OrderController {
+
+    private final OrderService orderService;
+    private final OrderPreviewService previewService;
+
+    public OrderController(
+            OrderService orderService,
+            OrderPreviewService previewService
+    ) {
+        this.orderService = orderService;
+        this.previewService = previewService;
+    }
+
+    @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
+    public OrderResponse placeOrder(
+            @PathVariable Long portfolioId,
+            @RequestBody OrderRequest request
+    ) {
+        return orderService.placeOrder(portfolioId, request);
+    }
+
+    @PostMapping("/preview")
+    public OrderPreviewResponse previewOrder(
+            @PathVariable Long portfolioId,
+            @RequestBody OrderRequest request
+    ) {
+        return previewService.preview(portfolioId, request);
+    }
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\portfolio\backend\src\main\java\com\portfoliolab\backend\portfolio\OrderPreviewResponse.java =====
+package com.portfoliolab.backend.portfolio;
+
+import java.math.BigDecimal;
+
+public record OrderPreviewResponse(
+        String assetSymbol,
+        String side,
+        BigDecimal quantity,
+        BigDecimal estimatedPrice,
+        String assetCurrency,
+        BigDecimal estimatedAssetTotal,
+        BigDecimal fxRate,
+        BigDecimal estimatedPortfolioTotal,
+        String portfolioCurrency,
+        BigDecimal availableCash,
+        BigDecimal estimatedCharges,
+        Boolean sufficientCash,
+        String disclaimer
+) {}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\portfolio\backend\src\main\java\com\portfoliolab\backend\portfolio\OrderPreviewService.java =====
+package com.portfoliolab.backend.portfolio;
+
+import com.portfoliolab.backend.asset.Asset;
+import com.portfoliolab.backend.asset.AssetRepository;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+
+import java.math.BigDecimal;
+import java.util.Locale;
+
+@Service
+public class OrderPreviewService {
+
+    private final PortfolioRepository portfolioRepository;
+    private final AssetRepository assetRepository;
+    private final OrderPricingService pricingService;
+
+    public OrderPreviewService(
+            PortfolioRepository portfolioRepository,
+            AssetRepository assetRepository,
+            OrderPricingService pricingService
+    ) {
+        this.portfolioRepository = portfolioRepository;
+        this.assetRepository = assetRepository;
+        this.pricingService = pricingService;
+    }
+
+    @Transactional(readOnly = true)
+    public OrderPreviewResponse preview(
+            Long portfolioId,
+            OrderRequest request
+    ) {
+        if (request == null ||
+                request.assetId() == null ||
+                request.type() == null ||
+                request.quantity() == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Asset ID, order type, and quantity are required"
+            );
+        }
+
+        String side = request.type()
+                .trim()
+                .toUpperCase(Locale.ROOT);
+
+        BigDecimal quantity = request.quantity();
+
+        if (!side.equals("BUY") && !side.equals("SELL")) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Order type must be BUY or SELL"
+            );
+        }
+
+        if (quantity.signum() <= 0 ||
+                quantity.stripTrailingZeros().scale() > 0 ||
+                quantity.precision() > 13) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Quantity must be a positive whole number of at most 13 digits"
+            );
+        }
+
+        Portfolio portfolio = portfolioRepository
+                .findById(portfolioId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Portfolio not found"
+                ));
+
+        Asset asset = assetRepository
+                .findById(request.assetId())
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Asset not found"
+                ));
+
+        OrderPricingService.Pricing pricing =
+                pricingService.calculate(asset, portfolio, quantity);
+
+        BigDecimal charges = BigDecimal.ZERO.setScale(4);
+
+        Boolean sufficientCash = side.equals("BUY")
+                ? portfolio.getCashBalance()
+                    .compareTo(pricing.portfolioTotal()) >= 0
+                : null;
+
+        return new OrderPreviewResponse(
+                asset.getSymbol(),
+                side,
+                quantity,
+                pricing.price(),
+                asset.getCurrency(),
+                pricing.assetTotal(),
+                pricing.fxRate(),
+                pricing.portfolioTotal(),
+                portfolio.getCurrency(),
+                portfolio.getCashBalance(),
+                charges,
+                sufficientCash,
+                "Educational simulation. Prices and FX rates may change before execution. No order has been placed."
+        );
+    }
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\portfolio\backend\src\main\java\com\portfoliolab\backend\portfolio\OrderPricingService.java =====
+package com.portfoliolab.backend.portfolio;
+
+import com.portfoliolab.backend.asset.Asset;
+import com.portfoliolab.backend.fx.FrankfurterRateService;
+import com.portfoliolab.backend.market.MarketPrice;
+import com.portfoliolab.backend.market.MarketService;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.Instant;
+
+@Service
+public class OrderPricingService {
+
+    private final MarketService marketService;
+    private final FrankfurterRateService frankfurterRateService;
+
+    public OrderPricingService(
+            MarketService marketService,
+            FrankfurterRateService frankfurterRateService
+    ) {
+        this.marketService = marketService;
+        this.frankfurterRateService = frankfurterRateService;
+    }
+
+    public Pricing calculate(
+            Asset asset,
+            Portfolio portfolio,
+            BigDecimal quantity
+    ) {
+        MarketPrice quote;
+
+        try {
+            quote = marketService.getCurrentPrices()
+                    .stream()
+                    .filter(item -> asset.getSymbol().equals(item.symbol()))
+                    .findFirst()
+                    .orElse(null);
+        } catch (Exception exception) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Simulated market service unavailable",
+                    exception
+            );
+        }
+
+        if (quote == null ||
+                quote.price() == null ||
+                quote.price().signum() <= 0 ||
+                !asset.getCurrency().equals(quote.currency()) ||
+                quote.updatedAt() == null ||
+                quote.updatedAt().isBefore(Instant.now().minusSeconds(60)) ||
+                quote.updatedAt().isAfter(Instant.now().plusSeconds(10))) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "A valid, recent simulated market quote is unavailable"
+            );
+        }
+
+        BigDecimal price = quote.price()
+                .setScale(4, RoundingMode.HALF_UP);
+
+        BigDecimal assetTotal = price.multiply(quantity);
+
+        if (assetTotal.precision() > 19 || assetTotal.scale() > 4) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Order total exceeds supported precision"
+            );
+        }
+
+        BigDecimal fxRate;
+
+        if (asset.getCurrency().equals(portfolio.getCurrency())) {
+            fxRate = BigDecimal.ONE.setScale(8);
+        } else {
+            try {
+                fxRate = frankfurterRateService.getLatestRate(
+                        asset.getCurrency(),
+                        portfolio.getCurrency()
+                ).rate().setScale(8, RoundingMode.HALF_UP);
+            } catch (Exception exception) {
+                throw new ResponseStatusException(
+                        HttpStatus.SERVICE_UNAVAILABLE,
+                        "FX reference rate unavailable",
+                        exception
+                );
+            }
+        }
+
+        if (fxRate.signum() <= 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Invalid FX reference rate"
+            );
+        }
+
+        BigDecimal portfolioTotal = assetTotal.multiply(fxRate)
+                .setScale(4, RoundingMode.HALF_UP);
+
+        if (portfolioTotal.precision() > 19) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Converted order total exceeds supported precision"
+            );
+        }
+
+        return new Pricing(price, assetTotal, fxRate, portfolioTotal);
+    }
+
+    public record Pricing(
+            BigDecimal price,
+            BigDecimal assetTotal,
+            BigDecimal fxRate,
+            BigDecimal portfolioTotal
+    ) {}
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\backend\src\main\java\com\portfoliolab\backend\portfolio\backend\src\main\java\com\portfoliolab\backend\portfolio\OrderService.java =====
+package com.portfoliolab.backend.portfolio;
+
+import com.portfoliolab.backend.asset.Asset;
+import com.portfoliolab.backend.asset.AssetRepository;
+import com.portfoliolab.backend.notification.NotificationOutbox;
+import com.portfoliolab.backend.risk.PortfolioTradeCommitted;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.Locale;
+@Service
+public class OrderService {
+
+    private final PortfolioRepository portfolioRepository;
+    private final AssetRepository assetRepository;
+    private final HoldingRepository holdingRepository;
+    private final TransactionRepository transactionRepository;
+    private final OrderPricingService pricingService;
+    private final com.portfoliolab.backend.risk.PreTradeRiskService preTradeRiskService;
+    private final NotificationOutbox notificationOutbox;
+    private final ApplicationEventPublisher eventPublisher;
+
+    public OrderService(
+            PortfolioRepository portfolioRepository,
+            AssetRepository assetRepository,
+            HoldingRepository holdingRepository,
+            TransactionRepository transactionRepository,
+            OrderPricingService pricingService,
+            com.portfoliolab.backend.risk.PreTradeRiskService preTradeRiskService,
+            NotificationOutbox notificationOutbox,
+            ApplicationEventPublisher eventPublisher
+    ) {
+        this.portfolioRepository = portfolioRepository;
+        this.assetRepository = assetRepository;
+        this.holdingRepository = holdingRepository;
+        this.transactionRepository = transactionRepository;
+        this.pricingService = pricingService;
+        this.preTradeRiskService = preTradeRiskService;
+        this.notificationOutbox = notificationOutbox;
+        this.eventPublisher = eventPublisher;
+    }
+
+    @Transactional
+    public OrderResponse placeOrder(Long portfolioId, OrderRequest request) {
+
+        if (request == null ||
+                request.assetId() == null ||
+                request.type() == null ||
+                request.quantity() == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Asset ID, order type, and quantity are required"
+            );
+        }
+
+        String type = request.type().trim().toUpperCase(Locale.ROOT);
+        BigDecimal quantity = request.quantity();
+
+        if (!type.equals("BUY") && !type.equals("SELL")) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Order type must be BUY or SELL"
+            );
+        }
+
+        if (quantity.signum() <= 0 ||
+                quantity.stripTrailingZeros().scale() > 0 ||
+                quantity.precision() > 13) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Quantity must be a positive whole number of at most 13 digits"
+            );
+        }
+
+        Portfolio portfolio = portfolioRepository.findByIdForUpdate(portfolioId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Portfolio not found"
+                ));
+
+        Asset asset = assetRepository.findById(request.assetId())
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Asset not found"
+                ));
+
+
+
+        OrderPricingService.Pricing pricing =
+                pricingService.calculate(asset, portfolio, quantity);
+
+        BigDecimal price = pricing.price();
+        BigDecimal total = pricing.assetTotal();
+        BigDecimal executionFxRate = pricing.fxRate();
+        BigDecimal portfolioAmount = pricing.portfolioTotal();
+
+        Holding holding = holdingRepository
+                .findByPortfolioIdAndAssetId(portfolioId, asset.getId())
+                .orElse(null);
+
+        preTradeRiskService.enforce(portfolio, asset, type, quantity, portfolioAmount);
+
+        if (type.equals("BUY")) {
+            processBuy(portfolio, asset, holding, quantity, price, portfolioAmount);
+        } else {
+            processSell(portfolio, holding, quantity, portfolioAmount);
+        }
+
+        Transaction transaction = new Transaction(
+                portfolio,
+                asset,
+                type,
+                quantity,
+                price,
+                total,
+                asset.getCurrency(),
+                executionFxRate,
+                portfolioAmount
+        );
+
+        transactionRepository.saveAndFlush(transaction);
+
+        notificationOutbox.recordTrade(
+                portfolio.getId(),
+                transaction.getId(),
+                asset.getSymbol(),
+                type,
+                quantity
+        );
+
+        eventPublisher.publishEvent(new PortfolioTradeCommitted(portfolio.getId()));
+
+        return new OrderResponse(
+                transaction.getId(),
+                portfolio.getId(),
+                asset.getSymbol(),
+                type,
+                quantity,
+                price,
+                total,
+                asset.getCurrency(),
+                executionFxRate,
+                portfolioAmount,
+                portfolio.getCurrency(),
+                portfolio.getCashBalance()
+        );
+    }
+
+    private void processBuy(
+            Portfolio portfolio,
+            Asset asset,
+            Holding holding,
+            BigDecimal quantity,
+            BigDecimal price,
+            BigDecimal total
+    ) {
+        if (portfolio.getCashBalance().compareTo(total) < 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Insufficient virtual cash"
+            );
+        }
+
+        if (holding == null) {
+            Holding created = new Holding(
+                    portfolio, asset, quantity, price
+            );
+            created.setHistoricalCostPortfolio(total);
+            holdingRepository.save(created);
+        } else {
+            BigDecimal oldQuantity = holding.getQuantity();
+            BigDecimal newQuantity = oldQuantity.add(quantity);
+
+            BigDecimal oldCost = oldQuantity.multiply(
+                    holding.getAverageBuyPrice()
+            );
+
+            BigDecimal newCost = quantity.multiply(price);
+
+            BigDecimal newAverage = oldCost.add(newCost)
+                    .divide(newQuantity, 4, RoundingMode.HALF_UP);
+
+            BigDecimal updatedHistoricalCost = holding
+                    .getHistoricalCostPortfolio()
+                    .add(total);
+
+            holding.updatePosition(newQuantity, newAverage);
+            holding.setHistoricalCostPortfolio(updatedHistoricalCost);
+        }
+
+        portfolio.setCashBalance(
+                portfolio.getCashBalance().subtract(total)
+        );
+    }
+
+    private void processSell(
+            Portfolio portfolio,
+            Holding holding,
+            BigDecimal quantity,
+            BigDecimal total
+    ) {
+        if (holding == null ||
+                holding.getQuantity().compareTo(quantity) < 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Insufficient holdings"
+            );
+        }
+
+        BigDecimal originalQuantity = holding.getQuantity();
+        BigDecimal remaining = originalQuantity.subtract(quantity);
+
+        if (remaining.signum() == 0) {
+            holdingRepository.delete(holding);
+        } else {
+            BigDecimal remainingHistoricalCost = holding
+                    .getHistoricalCostPortfolio()
+                    .multiply(remaining)
+                    .divide(originalQuantity, 4, RoundingMode.HALF_UP);
+
+            holding.updatePosition(
+                    remaining,
+                    holding.getAverageBuyPrice()
+            );
+
+            holding.setHistoricalCostPortfolio(
+                    remainingHistoricalCost
+            );
+        }
+
+        portfolio.setCashBalance(
+                portfolio.getCashBalance().add(total)
+        );
+    }
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\services\market-simulator\main.go =====
+package main
+
+import (
+	"encoding/json"
+	"log"
+	"net/http"
+	"time"
+
+	"github.com/coder/websocket"
+)
+
+func main() {
+	simulator := NewMarketSimulator()
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "UP",
+			"service": "market-simulator",
+		})
+	})
+
+	mux.HandleFunc("GET /prices", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(simulator.GetPrices())
+	})
+
+	// WebSocket endpoint for live simulated prices.
+	mux.HandleFunc("GET /ws/prices", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+			OriginPatterns: []string{"localhost:*", "127.0.0.1:*"},
+		})
+		if err != nil {
+			log.Printf("WebSocket connection rejected: %v", err)
+			return
+		}
+		defer conn.CloseNow()
+
+		ctx := r.Context()
+
+		sendPrices := func() error {
+			prices := simulator.GetPrices()
+
+			data, err := json.Marshal(prices)
+			if err != nil {
+				return err
+			}
+
+			return conn.Write(ctx, websocket.MessageText, data)
+		}
+
+		// Send prices immediately after connecting.
+		if err := sendPrices(); err != nil {
+			return
+		}
+
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := sendPrices(); err != nil {
+					return
+				}
+			}
+		}
+	})
+
+	// One shared market simulation for all connected clients.
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			simulator.UpdatePrices()
+		}
+	}()
+
+	log.Println("Market simulator listening on http://localhost:8081")
+	log.Println("WebSocket endpoint: ws://localhost:8081/ws/prices")
+
+	if err := http.ListenAndServe("127.0.0.1:8081", mux); err != nil {
+		log.Fatal(err)
+	}
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\services\market-simulator\simulator.go =====
+package main
+
+import (
+ "math/rand"
+ "sync"
+ "time"
+)
+
+type AssetPrice struct {
+ Symbol string `json:"symbol"`
+ Price float64 `json:"price"`
+ Currency string `json:"currency"`
+ UpdatedAt time.Time `json:"updatedAt"`
+}
+
+type MarketSimulator struct {
+ mu sync.RWMutex
+ prices map[string]AssetPrice
+ volatility map[string]float64
+}
+
+func NewMarketSimulator() *MarketSimulator {
+ now := time.Now().UTC()
+ m := &MarketSimulator{prices: make(map[string]AssetPrice), volatility: make(map[string]float64)}
+ m.prices["ALPHA"] = AssetPrice{"ALPHA", 98.4, "INR", now}
+ m.volatility["ALPHA"] = 0.01
+ m.prices["DEMO"] = AssetPrice{"DEMO", 125.5, "INR", now}
+ m.volatility["DEMO"] = 0.01
+ m.prices["GREEN"] = AssetPrice{"GREEN", 315.25, "INR", now}
+ m.volatility["GREEN"] = 0.01
+ m.prices["NOVA"] = AssetPrice{"NOVA", 842.75, "INR", now}
+ m.volatility["NOVA"] = 0.01
+ m.prices["ORBIT"] = AssetPrice{"ORBIT", 1560, "INR", now}
+ m.volatility["ORBIT"] = 0.01
+ m.prices["NEXUS"] = AssetPrice{"NEXUS", 1245, "INR", now}
+ m.volatility["NEXUS"] = 0.013
+ m.prices["QUANT"] = AssetPrice{"QUANT", 2180, "INR", now}
+ m.volatility["QUANT"] = 0.018
+ m.prices["CYBER"] = AssetPrice{"CYBER", 875, "INR", now}
+ m.volatility["CYBER"] = 0.016
+ m.prices["CLOUD"] = AssetPrice{"CLOUD", 1560, "INR", now}
+ m.volatility["CLOUD"] = 0.014
+ m.prices["FINIX"] = AssetPrice{"FINIX", 640, "INR", now}
+ m.volatility["FINIX"] = 0.009
+ m.prices["VAULT"] = AssetPrice{"VAULT", 1120, "INR", now}
+ m.volatility["VAULT"] = 0.008
+ m.prices["CREDO"] = AssetPrice{"CREDO", 425, "INR", now}
+ m.volatility["CREDO"] = 0.013
+ m.prices["PAYGO"] = AssetPrice{"PAYGO", 310, "INR", now}
+ m.volatility["PAYGO"] = 0.017
+ m.prices["TRUST"] = AssetPrice{"TRUST", 1780, "INR", now}
+ m.volatility["TRUST"] = 0.008
+ m.prices["SOLAR"] = AssetPrice{"SOLAR", 485, "INR", now}
+ m.volatility["SOLAR"] = 0.017
+ m.prices["VOLT"] = AssetPrice{"VOLT", 725, "INR", now}
+ m.volatility["VOLT"] = 0.015
+ m.prices["HYDRO"] = AssetPrice{"HYDRO", 365, "INR", now}
+ m.volatility["HYDRO"] = 0.01
+ m.prices["STEEL"] = AssetPrice{"STEEL", 920, "INR", now}
+ m.volatility["STEEL"] = 0.011
+ m.prices["METRO"] = AssetPrice{"METRO", 580, "INR", now}
+ m.volatility["METRO"] = 0.009
+ m.prices["MEDIX"] = AssetPrice{"MEDIX", 1340, "INR", now}
+ m.volatility["MEDIX"] = 0.01
+ m.prices["BIOVA"] = AssetPrice{"BIOVA", 765, "INR", now}
+ m.volatility["BIOVA"] = 0.02
+ m.prices["CAREX"] = AssetPrice{"CAREX", 545, "INR", now}
+ m.volatility["CAREX"] = 0.012
+ m.prices["FRESH"] = AssetPrice{"FRESH", 295, "INR", now}
+ m.volatility["FRESH"] = 0.008
+ m.prices["URBAN"] = AssetPrice{"URBAN", 690, "INR", now}
+ m.volatility["URBAN"] = 0.011
+ m.prices["AURORA"] = AssetPrice{"AURORA", 1095, "INR", now}
+ m.volatility["AURORA"] = 0.009
+ return m
+}
+
+func (m *MarketSimulator) GetPrices() []AssetPrice {
+ m.mu.RLock()
+ defer m.mu.RUnlock()
+ result := make([]AssetPrice, 0, len(m.prices))
+ for _, price := range m.prices { result = append(result, price) }
+ return result
+}
+
+func (m *MarketSimulator) UpdatePrices() {
+ m.mu.Lock()
+ defer m.mu.Unlock()
+ now := time.Now().UTC()
+ for symbol, asset := range m.prices {
+  change := (rand.Float64() - 0.5) * 2 * m.volatility[symbol]
+  asset.Price = asset.Price * (1 + change)
+  asset.UpdatedAt = now
+  m.prices[symbol] = asset
+ }
+}
+
+===== C:\Users\hello\Projects\PortfolioLab\services\market-simulator\simulator_test.go =====
+package main
+
+import (
+	"testing"
+)
+
+func TestSimulatorInitialPrices(t *testing.T) {
+	simulator := NewMarketSimulator()
+
+	prices := simulator.GetPrices()
+
+	if len(prices) != 25 {
+		t.Fatalf("expected 25 assets, got %d", len(prices))
+	}
+
+	for _, asset := range prices {
+		if asset.Price <= 0 {
+			t.Errorf("invalid price for %s: %f", asset.Symbol, asset.Price)
+		}
+	}
+}
+
+func TestSimulatorPriceUpdates(t *testing.T) {
+	simulator := NewMarketSimulator()
+
+	simulator.UpdatePrices()
+
+	prices := simulator.GetPrices()
+
+	for _, asset := range prices {
+		if asset.Price <= 0 {
+			t.Errorf("price became invalid for %s", asset.Symbol)
+		}
+
+		if asset.UpdatedAt.IsZero() {
+			t.Errorf("missing update timestamp for %s", asset.Symbol)
+		}
+	}
+}
+

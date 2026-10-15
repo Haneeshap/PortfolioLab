@@ -1,0 +1,2950 @@
+===== backend\src\main\java\com\portfoliolab\backend\history\PortfolioHistoryController.java =====
+package com.portfoliolab.backend.history;
+
+import com.portfoliolab.backend.portfolio.PortfolioRepository;
+import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
+
+import java.util.List;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/portfolios")
+public class PortfolioHistoryController {
+    private final JdbcTemplate jdbc;
+    private final PortfolioRepository portfolios;
+
+    public PortfolioHistoryController(
+            JdbcTemplate jdbc,
+            PortfolioRepository portfolios
+    ) {
+        this.jdbc = jdbc;
+        this.portfolios = portfolios;
+    }
+
+    @GetMapping("/{id}/history")
+    public List<Map<String, Object>> history(@PathVariable Long id) {
+        if (!portfolios.existsById(id)) {
+            throw new ResponseStatusException(
+                    HttpStatus.NOT_FOUND, "Portfolio not found"
+            );
+        }
+
+        return jdbc.queryForList("""
+                SELECT captured_at AS "capturedAt",
+                       total_value AS "totalValue",
+                       cash_balance AS "cashBalance",
+                       holdings_value AS "holdingsValue",
+                       currency,
+                       valuation_source AS "valuationSource"
+                FROM (
+                    SELECT id, captured_at, total_value,
+                           cash_balance, holdings_value,
+                           currency, valuation_source
+                    FROM portfolio_snapshots
+                    WHERE portfolio_id = ?
+                    ORDER BY captured_at DESC, id DESC
+                    LIMIT 240
+                ) recent
+                ORDER BY captured_at ASC, id ASC
+                """, id);
+    }
+}
+
+
+===== backend\src\main\java\com\portfoliolab\backend\history\PortfolioHistoryRecorder.java =====
+package com.portfoliolab.backend.history;
+
+import com.portfoliolab.backend.market.MarketPrice;
+import com.portfoliolab.backend.market.MarketService;
+import com.portfoliolab.backend.portfolio.Holding;
+import com.portfoliolab.backend.portfolio.HoldingRepository;
+import com.portfoliolab.backend.portfolio.Portfolio;
+import com.portfoliolab.backend.portfolio.PortfolioRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+@Service
+public class PortfolioHistoryRecorder {
+    private static final Logger log =
+            LoggerFactory.getLogger(PortfolioHistoryRecorder.class);
+
+    private final PortfolioRepository portfolios;
+    private final HoldingRepository holdings;
+    private final MarketService market;
+    private final JdbcTemplate jdbc;
+
+    public PortfolioHistoryRecorder(
+            PortfolioRepository portfolios,
+            HoldingRepository holdings,
+            MarketService market,
+            JdbcTemplate jdbc
+    ) {
+        this.portfolios = portfolios;
+        this.holdings = holdings;
+        this.market = market;
+        this.jdbc = jdbc;
+    }
+
+    @Scheduled(fixedDelay = 30000, initialDelay = 5000)
+    public void record() {
+        List<Portfolio> allPortfolios = portfolios.findAll();
+
+        if (allPortfolios.isEmpty()) {
+            return;
+        }
+
+        Map<String, MarketPrice> quotes;
+        try {
+            quotes = market.getCurrentPrices().stream()
+                    .collect(Collectors.toMap(
+                            MarketPrice::symbol,
+                            Function.identity(),
+                            (first, second) -> second
+                    ));
+        } catch (Exception exception) {
+            log.warn("Skipping history snapshot: market unavailable");
+            return;
+        }
+
+        for (Portfolio portfolio : allPortfolios) {
+            try {
+                recordPortfolio(portfolio, quotes);
+            } catch (Exception exception) {
+                log.warn(
+                        "Could not record portfolio {}: {}",
+                        portfolio.getId(),
+                        exception.getMessage()
+                );
+            }
+        }
+    }
+
+    private void recordPortfolio(
+            Portfolio portfolio,
+            Map<String, MarketPrice> quotes
+    ) {
+        List<Holding> positions =
+                holdings.findByPortfolioId(portfolio.getId());
+
+        BigDecimal holdingsValue = BigDecimal.ZERO;
+
+        for (Holding holding : positions) {
+            String symbol = holding.getAsset().getSymbol();
+            String currency = holding.getAsset().getCurrency();
+
+            MarketPrice quote = quotes.get(symbol);
+
+            if (quote == null
+                    || quote.price() == null
+                    || quote.price().signum() <= 0
+                    || !currency.equals(quote.currency())
+                    || !portfolio.getCurrency().equals(currency)) {
+                log.warn(
+                        "Skipping snapshot for portfolio {}: invalid or missing quote for {}",
+                        portfolio.getId(),
+                        symbol
+                );
+                return;
+            }
+
+            holdingsValue = holdingsValue.add(
+                    holding.getQuantity().multiply(quote.price())
+            );
+        }
+
+        BigDecimal cash = portfolio.getCashBalance();
+        BigDecimal total = cash.add(holdingsValue);
+
+        jdbc.update("""
+                INSERT INTO portfolio_snapshots
+                (portfolio_id, cash_balance, holdings_value,
+                 total_value, currency, valuation_source)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                portfolio.getId(),
+                cash,
+                holdingsValue.setScale(4, RoundingMode.HALF_UP),
+                total.setScale(4, RoundingMode.HALF_UP),
+                portfolio.getCurrency(),
+                "GO_SIMULATOR"
+        );
+    }
+}
+
+
+===== backend\src\main\java\com\portfoliolab\backend\notification\PortfolioEventOutbox.java =====
+package com.portfoliolab.backend.notification;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Component;
+import java.util.Map;
+import java.util.UUID;
+
+@Component
+public class PortfolioEventOutbox {
+    private final JdbcTemplate jdbc;
+    private final ObjectMapper mapper;
+    public PortfolioEventOutbox(JdbcTemplate jdbc, ObjectMapper mapper) {
+        this.jdbc = jdbc;
+        this.mapper = mapper;
+    }
+    public void record(long portfolioId, String type, Map<String, Object> attributes) {
+        try {
+            UUID id = UUID.randomUUID();
+            var event = new java.util.HashMap<String, Object>(attributes);
+            event.put("eventId", id.toString());
+            event.put("eventType", type);
+            event.put("portfolioId", portfolioId);
+            jdbc.update("INSERT INTO notification_outbox (event_id, event_type, portfolio_id, payload) VALUES (?, ?, ?, ?)",
+                    id, type, portfolioId, mapper.writeValueAsString(event));
+        } catch (Exception e) {
+            throw new IllegalStateException("Unable to record portfolio event", e);
+        }
+    }
+}
+
+===== backend\src\main\java\com\portfoliolab\backend\portfolio\backend\src\main\java\com\portfoliolab\backend\portfolio\backend\src\main\java\com\portfoliolab\backend\portfolio\backend\src\main\java\com\portfoliolab\backend\portfolio\PortfolioQueryController.java =====
+
+package com.portfoliolab.backend.portfolio;
+
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/portfolios/{portfolioId}")
+public class PortfolioQueryController {
+
+    private final PortfolioQueryService portfolioQueryService;
+
+    public PortfolioQueryController(
+            PortfolioQueryService portfolioQueryService
+    ) {
+        this.portfolioQueryService = portfolioQueryService;
+    }
+
+    @GetMapping("/holdings")
+    public List<HoldingResponse> getHoldings(
+            @PathVariable Long portfolioId
+    ) {
+        return portfolioQueryService.getHoldings(portfolioId);
+    }
+
+    @GetMapping("/transactions")
+    public List<TransactionResponse> getTransactions(
+            @PathVariable Long portfolioId
+    ) {
+        return portfolioQueryService.getTransactions(portfolioId);
+    }
+}
+
+
+===== backend\src\main\java\com\portfoliolab\backend\portfolio\backend\src\main\java\com\portfoliolab\backend\portfolio\backend\src\main\java\com\portfoliolab\backend\portfolio\PortfolioQueryService.java =====
+
+package com.portfoliolab.backend.portfolio;
+
+import com.portfoliolab.backend.fx.FrankfurterRateService;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.List;
+
+@Service
+public class PortfolioQueryService {
+
+    private final PortfolioRepository portfolioRepository;
+    private final HoldingRepository holdingRepository;
+    private final TransactionRepository transactionRepository;
+    private final FrankfurterRateService frankfurterRateService;
+
+    public PortfolioQueryService(
+            PortfolioRepository portfolioRepository,
+            HoldingRepository holdingRepository,
+            TransactionRepository transactionRepository,
+            FrankfurterRateService frankfurterRateService
+    ) {
+        this.portfolioRepository = portfolioRepository;
+        this.holdingRepository = holdingRepository;
+        this.transactionRepository = transactionRepository;
+        this.frankfurterRateService = frankfurterRateService;
+    }
+
+    @Transactional(readOnly = true)
+    public List<HoldingResponse> getHoldings(Long portfolioId) {
+        Portfolio portfolio = portfolioRepository.findById(portfolioId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Portfolio not found"
+                ));
+
+        String portfolioCurrency = portfolio.getCurrency();
+
+        return holdingRepository.findByPortfolioId(portfolioId)
+                .stream()
+                .map(holding -> {
+                    var asset = holding.getAsset();
+
+                    BigDecimal quantity = holding.getQuantity();
+                    BigDecimal currentPrice = asset.getPrice();
+                    BigDecimal averagePrice = holding.getAverageBuyPrice();
+
+                    BigDecimal marketValue =
+                            quantity.multiply(currentPrice);
+
+                    BigDecimal costBasis =
+                            quantity.multiply(averagePrice);
+
+                    BigDecimal profitLoss =
+                            marketValue.subtract(costBasis);
+
+                    BigDecimal currentFxRate = BigDecimal.ONE;
+
+                    if (!asset.getCurrency().equalsIgnoreCase(portfolioCurrency)) {
+                        try {
+                            currentFxRate = frankfurterRateService.getLatestRate(
+                                    asset.getCurrency(),
+                                    portfolioCurrency
+                            ).rate();
+                        } catch (Exception exception) {
+                            throw new ResponseStatusException(
+                                    HttpStatus.SERVICE_UNAVAILABLE,
+                                    "FX reference rate unavailable for portfolio valuation",
+                                    exception
+                            );
+                        }
+                    }
+
+                    if (currentFxRate == null || currentFxRate.signum() <= 0) {
+                        throw new ResponseStatusException(
+                                HttpStatus.SERVICE_UNAVAILABLE,
+                                "Invalid FX reference rate"
+                        );
+                    }
+
+                    BigDecimal convertedMarketValue =
+                            marketValue.multiply(currentFxRate)
+                                    .setScale(4, RoundingMode.HALF_UP);
+
+                    BigDecimal historicalCost = holding
+                            .getHistoricalCostPortfolio();
+
+                    BigDecimal fxInclusiveProfitLoss =
+                            convertedMarketValue.subtract(historicalCost);
+
+                    return new HoldingResponse(
+                            asset.getId(),
+                            asset.getSymbol(),
+                            asset.getName(),
+                            quantity,
+                            averagePrice,
+                            currentPrice,
+                            marketValue,
+                            profitLoss,
+                            asset.getCurrency(),
+                            currentFxRate,
+                            convertedMarketValue,
+                            portfolioCurrency,
+                            historicalCost,
+                            fxInclusiveProfitLoss
+                    );
+                })
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<TransactionResponse> getTransactions(Long portfolioId) {
+        verifyPortfolioExists(portfolioId);
+
+        return transactionRepository
+                .findByPortfolioIdOrderByCreatedAtDesc(portfolioId)
+                .stream()
+                .map(transaction -> new TransactionResponse(
+                        transaction.getId(),
+                        transaction.getAsset().getSymbol(),
+                        transaction.getTransactionType(),
+                        transaction.getQuantity(),
+                        transaction.getPricePerUnit(),
+                        transaction.getTotalAmount(),
+                        transaction.getCurrency(),
+                        transaction.getCreatedAt()
+                ))
+                .toList();
+    }
+
+    private void verifyPortfolioExists(Long portfolioId) {
+        if (!portfolioRepository.existsById(portfolioId)) {
+            throw new ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "Portfolio not found"
+            );
+        }
+    }
+}
+
+
+===== backend\src\main\java\com\portfoliolab\backend\portfolio\backend\src\main\java\com\portfoliolab\backend\portfolio\Holding.java =====
+
+package com.portfoliolab.backend.portfolio;
+
+import com.portfoliolab.backend.asset.Asset;
+import jakarta.persistence.*;
+
+import java.math.BigDecimal;
+
+@Entity
+@Table(
+    name = "holdings",
+    uniqueConstraints = @UniqueConstraint(
+        columnNames = {"portfolio_id", "asset_id"}
+    )
+)
+public class Holding {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "portfolio_id", nullable = false)
+    private Portfolio portfolio;
+
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "asset_id", nullable = false)
+    private Asset asset;
+
+    @Column(nullable = false, precision = 19, scale = 6)
+    private BigDecimal quantity;
+
+    @Column(
+        name = "average_buy_price",
+        nullable = false,
+        precision = 19,
+        scale = 4
+    )
+    private BigDecimal averageBuyPrice;
+
+    @Column(
+        name = "historical_cost_portfolio",
+        nullable = false,
+        precision = 19,
+        scale = 4
+    )
+    private BigDecimal historicalCostPortfolio;
+
+    protected Holding() {
+    }
+
+    public Holding(
+            Portfolio portfolio,
+            Asset asset,
+            BigDecimal quantity,
+            BigDecimal averageBuyPrice
+    ) {
+        this.portfolio = portfolio;
+        this.asset = asset;
+        this.quantity = quantity;
+        this.averageBuyPrice = averageBuyPrice;
+        this.historicalCostPortfolio = quantity
+                .multiply(averageBuyPrice)
+                .setScale(4, java.math.RoundingMode.HALF_UP);
+    }
+
+    public BigDecimal getHistoricalCostPortfolio() {
+        return historicalCostPortfolio;
+    }
+
+    public void setHistoricalCostPortfolio(BigDecimal value) {
+        if (value == null || value.signum() < 0) {
+            throw new IllegalArgumentException(
+                "Historical cost must be nonnegative"
+            );
+        }
+        this.historicalCostPortfolio = value.setScale(
+                4, java.math.RoundingMode.HALF_UP
+        );
+    }
+
+    public Long getId() {
+        return id;
+    }
+
+    public Portfolio getPortfolio() {
+        return portfolio;
+    }
+
+    public Asset getAsset() {
+        return asset;
+    }
+
+    public BigDecimal getQuantity() {
+        return quantity;
+    }
+
+    public BigDecimal getAverageBuyPrice() {
+        return averageBuyPrice;
+    }
+
+    public void updatePosition(
+            BigDecimal quantity,
+            BigDecimal averageBuyPrice
+    ) {
+        if (quantity == null || quantity.signum() <= 0) {
+            throw new IllegalArgumentException(
+                "Holding quantity must be positive"
+            );
+        }
+
+        if (averageBuyPrice == null ||
+                averageBuyPrice.signum() < 0) {
+            throw new IllegalArgumentException(
+                "Average buy price cannot be negative"
+            );
+        }
+
+        this.quantity = quantity;
+        this.averageBuyPrice = averageBuyPrice;
+    }
+}
+
+
+===== backend\src\main\java\com\portfoliolab\backend\portfolio\backend\src\main\java\com\portfoliolab\backend\portfolio\HoldingRepository.java =====
+package com.portfoliolab.backend.portfolio;
+
+import org.springframework.data.jpa.repository.EntityGraph;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.List;
+import java.util.Optional;
+
+public interface HoldingRepository extends JpaRepository<Holding, Long> {
+
+    @EntityGraph(attributePaths = {"asset"})
+    List<Holding> findByPortfolioId(Long portfolioId);
+
+    Optional<Holding> findByPortfolioIdAndAssetId(
+            Long portfolioId,
+            Long assetId
+    );
+}
+
+===== backend\src\main\java\com\portfoliolab\backend\portfolio\backend\src\main\java\com\portfoliolab\backend\portfolio\OrderPricingService.java =====
+package com.portfoliolab.backend.portfolio;
+
+import com.portfoliolab.backend.asset.Asset;
+import com.portfoliolab.backend.fx.FrankfurterRateService;
+import com.portfoliolab.backend.market.MarketPrice;
+import com.portfoliolab.backend.market.MarketService;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.Instant;
+
+@Service
+public class OrderPricingService {
+
+    private final MarketService marketService;
+    private final FrankfurterRateService frankfurterRateService;
+
+    public OrderPricingService(
+            MarketService marketService,
+            FrankfurterRateService frankfurterRateService
+    ) {
+        this.marketService = marketService;
+        this.frankfurterRateService = frankfurterRateService;
+    }
+
+    public Pricing calculate(
+            Asset asset,
+            Portfolio portfolio,
+            BigDecimal quantity
+    ) {
+        MarketPrice quote;
+
+        try {
+            quote = marketService.getCurrentPrices()
+                    .stream()
+                    .filter(item -> asset.getSymbol().equals(item.symbol()))
+                    .findFirst()
+                    .orElse(null);
+        } catch (Exception exception) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Simulated market service unavailable",
+                    exception
+            );
+        }
+
+        if (quote == null ||
+                quote.price() == null ||
+                quote.price().signum() <= 0 ||
+                !asset.getCurrency().equals(quote.currency()) ||
+                quote.updatedAt() == null ||
+                quote.updatedAt().isBefore(Instant.now().minusSeconds(60)) ||
+                quote.updatedAt().isAfter(Instant.now().plusSeconds(10))) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "A valid, recent simulated market quote is unavailable"
+            );
+        }
+
+        BigDecimal price = quote.price()
+                .setScale(4, RoundingMode.HALF_UP);
+
+        BigDecimal assetTotal = price.multiply(quantity)
+                .setScale(4, RoundingMode.HALF_UP);
+
+        if (assetTotal.precision() > 19 || assetTotal.scale() > 4) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Order total exceeds supported precision"
+            );
+        }
+
+        BigDecimal fxRate;
+
+        if (asset.getCurrency().equals(portfolio.getCurrency())) {
+            fxRate = BigDecimal.ONE.setScale(8);
+        } else {
+            try {
+                fxRate = frankfurterRateService.getLatestRate(
+                        asset.getCurrency(),
+                        portfolio.getCurrency()
+                ).rate().setScale(8, RoundingMode.HALF_UP);
+            } catch (Exception exception) {
+                throw new ResponseStatusException(
+                        HttpStatus.SERVICE_UNAVAILABLE,
+                        "FX reference rate unavailable",
+                        exception
+                );
+            }
+        }
+
+        if (fxRate.signum() <= 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Invalid FX reference rate"
+            );
+        }
+
+        BigDecimal portfolioTotal = assetTotal.multiply(fxRate)
+                .setScale(4, RoundingMode.HALF_UP);
+
+        if (portfolioTotal.precision() > 19) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Converted order total exceeds supported precision"
+            );
+        }
+
+        return new Pricing(price, assetTotal, fxRate, portfolioTotal);
+    }
+
+    public record Pricing(
+            BigDecimal price,
+            BigDecimal assetTotal,
+            BigDecimal fxRate,
+            BigDecimal portfolioTotal
+    ) {}
+}
+
+
+
+===== backend\src\main\java\com\portfoliolab\backend\portfolio\HoldingResponse.java =====
+package com.portfoliolab.backend.portfolio;
+
+import java.math.BigDecimal;
+
+public record HoldingResponse(
+        Long assetId,
+        String symbol,
+        String name,
+        BigDecimal quantity,
+        BigDecimal averageBuyPrice,
+        BigDecimal currentPrice,
+        BigDecimal marketValue,
+        BigDecimal unrealizedProfitLoss,
+        String currency,
+        BigDecimal currentFxRate,
+        BigDecimal marketValueInPortfolioCurrency,
+        String portfolioCurrency,
+        BigDecimal historicalCostInPortfolioCurrency,
+        BigDecimal unrealizedProfitLossInPortfolioCurrency
+) {
+}
+
+===== backend\src\main\java\com\portfoliolab\backend\portfolio\Portfolio.java =====
+
+package com.portfoliolab.backend.portfolio;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+
+import java.math.BigDecimal;
+
+@Entity
+@Table(name = "portfolios")
+public class Portfolio {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false, length = 100)
+    private String name;
+
+    @Column(name = "cash_balance", nullable = false, precision = 19, scale = 4)
+    private BigDecimal cashBalance;
+
+    @Column(nullable = false, length = 3)
+    private String currency;
+
+    protected Portfolio() {
+        // Required by JPA
+    }
+
+    public Long getId() {
+        return id;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public BigDecimal getCashBalance() {
+        return cashBalance;
+    }
+
+    public String getCurrency() {
+        return currency;
+    }
+public void setCashBalance(BigDecimal cashBalance) {
+    if (cashBalance == null || cashBalance.signum() < 0) {
+        throw new IllegalArgumentException(
+                "Cash balance cannot be negative"
+        );
+    }
+
+    this.cashBalance = cashBalance;
+}
+}
+
+
+===== backend\src\main\java\com\portfoliolab\backend\portfolio\PortfolioController.java =====
+
+package com.portfoliolab.backend.portfolio;
+
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequestMapping("/api/portfolios")
+public class PortfolioController {
+
+    private final PortfolioService portfolioService;
+
+    public PortfolioController(PortfolioService portfolioService) {
+        this.portfolioService = portfolioService;
+    }
+
+    @GetMapping("/{id}")
+    public PortfolioResponse getPortfolio(@PathVariable Long id) {
+        return portfolioService.getPortfolio(id);
+    }
+}
+
+
+===== backend\src\main\java\com\portfoliolab\backend\portfolio\PortfolioRepository.java =====
+package com.portfoliolab.backend.portfolio;
+
+import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+import java.util.Optional;
+
+public interface PortfolioRepository
+        extends JpaRepository<Portfolio, Long> {
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT p FROM Portfolio p WHERE p.id = :id")
+    Optional<Portfolio> findByIdForUpdate(@Param("id") Long id);
+}
+
+===== backend\src\main\java\com\portfoliolab\backend\portfolio\PortfolioResponse.java =====
+package com.portfoliolab.backend.portfolio;
+
+import java.math.BigDecimal;
+
+public record PortfolioResponse(
+        Long id,
+        String name,
+        BigDecimal cashBalance,
+        String currency
+) {
+}
+
+===== backend\src\main\java\com\portfoliolab\backend\portfolio\PortfolioService.java =====
+
+package com.portfoliolab.backend.portfolio;
+
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+
+import static org.springframework.http.HttpStatus.NOT_FOUND;
+
+@Service
+public class PortfolioService {
+
+    private final PortfolioRepository portfolioRepository;
+
+    public PortfolioService(PortfolioRepository portfolioRepository) {
+        this.portfolioRepository = portfolioRepository;
+    }
+
+    @Transactional(readOnly = true)
+    public PortfolioResponse getPortfolio(Long id) {
+        Portfolio portfolio = portfolioRepository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(
+                        NOT_FOUND,
+                        "Portfolio not found"
+                ));
+
+        return new PortfolioResponse(
+                portfolio.getId(),
+                portfolio.getName(),
+                portfolio.getCashBalance(),
+                portfolio.getCurrency()
+        );
+    }
+}
+
+
+===== backend\src\main\java\com\portfoliolab\backend\portfolio\Transaction.java =====
+package com.portfoliolab.backend.portfolio;
+
+import com.portfoliolab.backend.asset.Asset;
+import jakarta.persistence.*;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+
+@Entity
+@Table(name = "transactions")
+public class Transaction {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "portfolio_id", nullable = false)
+    private Portfolio portfolio;
+
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "asset_id", nullable = false)
+    private Asset asset;
+
+    @Column(name = "transaction_type", nullable = false, length = 4)
+    private String transactionType;
+
+    @Column(nullable = false, precision = 19, scale = 6)
+    private BigDecimal quantity;
+
+    @Column(name = "price_per_unit", nullable = false, precision = 19, scale = 4)
+    private BigDecimal pricePerUnit;
+
+    @Column(name = "total_amount", nullable = false, precision = 19, scale = 4)
+    private BigDecimal totalAmount;
+
+    @Column(name = "execution_fx_rate", nullable = false, precision = 19, scale = 8)
+private BigDecimal executionFxRate;
+
+@Column(name = "portfolio_amount", nullable = false, precision = 19, scale = 4)
+private BigDecimal portfolioAmount;
+
+    @Column(nullable = false, length = 3)
+    private String currency;
+
+    @Column(name = "created_at", nullable = false, insertable = false, updatable = false)
+    private Instant createdAt;
+
+    protected Transaction() {
+    }
+
+   public Transaction(
+        Portfolio portfolio,
+        Asset asset,
+        String transactionType,
+        BigDecimal quantity,
+        BigDecimal pricePerUnit,
+        BigDecimal totalAmount,
+        String currency,
+        BigDecimal executionFxRate,
+        BigDecimal portfolioAmount
+) {
+    this.portfolio = portfolio;
+    this.asset = asset;
+    this.transactionType = transactionType;
+    this.quantity = quantity;
+    this.pricePerUnit = pricePerUnit;
+    this.totalAmount = totalAmount;
+    this.currency = currency;
+    this.executionFxRate = executionFxRate;
+    this.portfolioAmount = portfolioAmount;
+}
+
+    public Long getId() {
+        return id;
+    }
+
+    public Portfolio getPortfolio() {
+        return portfolio;
+    }
+
+    public Asset getAsset() {
+        return asset;
+    }
+
+    public String getTransactionType() {
+        return transactionType;
+    }
+
+    public BigDecimal getQuantity() {
+        return quantity;
+    }
+
+    public BigDecimal getPricePerUnit() {
+        return pricePerUnit;
+    }
+
+    public BigDecimal getTotalAmount() {
+        return totalAmount;
+    }
+
+    public String getCurrency() {
+        return currency;
+    }
+
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+public BigDecimal getExecutionFxRate() {
+    return executionFxRate;
+}
+
+public BigDecimal getPortfolioAmount() {
+    return portfolioAmount;
+}
+}
+
+===== backend\src\main\java\com\portfoliolab\backend\portfolio\TransactionRepository.java =====
+package com.portfoliolab.backend.portfolio;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.List;
+
+public interface TransactionRepository
+        extends JpaRepository<Transaction, Long> {
+
+    List<Transaction> findByPortfolioIdOrderByCreatedAtDesc(
+            Long portfolioId
+    );
+}
+
+===== backend\src\main\java\com\portfoliolab\backend\portfolio\TransactionResponse.java =====
+package com.portfoliolab.backend.portfolio;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+
+public record TransactionResponse(
+        Long id,
+        String assetSymbol,
+        String type,
+        BigDecimal quantity,
+        BigDecimal pricePerUnit,
+        BigDecimal totalAmount,
+        String currency,
+        Instant createdAt
+) {
+}
+
+===== backend\src\main\java\com\portfoliolab\backend\risk\PortfolioRiskAgent.java =====
+package com.portfoliolab.backend.risk;
+
+import com.portfoliolab.backend.notification.PortfolioEventOutbox;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.Map;
+
+@Service
+public class PortfolioRiskAgent {
+    private final JdbcTemplate jdbc;
+    private final PortfolioEventOutbox outbox;
+    public PortfolioRiskAgent(JdbcTemplate jdbc, PortfolioEventOutbox outbox) {
+        this.jdbc = jdbc;
+        this.outbox = outbox;
+    }
+    @Transactional
+    public Map<String, Object> analyze(long portfolioId) {
+        Integer exists = jdbc.queryForObject("SELECT count(*) FROM portfolios WHERE id = ?", Integer.class, portfolioId);
+        if (exists == null || exists == 0) throw new IllegalArgumentException("Portfolio not found");
+        // Historical cost is already denominated in portfolio currency, unlike raw market prices.
+        var positions = jdbc.query("""
+                SELECT a.symbol, h.historical_cost_portfolio AS value
+                FROM holdings h JOIN assets a ON a.id = h.asset_id
+                WHERE h.portfolio_id = ? AND h.historical_cost_portfolio > 0
+                ORDER BY h.historical_cost_portfolio DESC, a.symbol
+                """, (rs, row) -> Map.<String,Object>of(
+                    "symbol", rs.getString("symbol"), "value", rs.getBigDecimal("value")), portfolioId);
+        if (positions.isEmpty()) return Map.of("status", "NO_HOLDINGS", "notificationCreated", false);
+        BigDecimal total = positions.stream().map(p -> (BigDecimal)p.get("value"))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (total.signum() <= 0) return Map.of("status", "NO_COST_BASIS", "notificationCreated", false);
+        var top = positions.get(0);
+        String symbol = (String)top.get("symbol");
+        BigDecimal percentage = ((BigDecimal)top.get("value"))
+                .multiply(BigDecimal.valueOf(100)).divide(total, 1, RoundingMode.HALF_UP);
+        if (percentage.compareTo(BigDecimal.valueOf(50)) < 0)
+            return Map.of("status", "BELOW_THRESHOLD", "largestPosition", symbol,
+                    "concentrationPercent", percentage, "notificationCreated", false);
+        String band = percentage.compareTo(BigDecimal.valueOf(75)) >= 0 ? "HIGH" : "ELEVATED";
+        String key = "COST_CONCENTRATION:" + symbol + ":" + band;
+        // Once per day per symbol and severity; atomic suppression for concurrent requests.
+        int emitted = jdbc.update("""
+                INSERT INTO portfolio_risk_insights (portfolio_id, insight_key, last_emitted_at)
+                VALUES (?, ?, NOW())
+                ON CONFLICT (portfolio_id, insight_key) DO UPDATE
+                  SET last_emitted_at = NOW()
+                  WHERE portfolio_risk_insights.last_emitted_at < NOW() - INTERVAL '1 day'
+                """, portfolioId, key);
+        if (emitted > 0) {
+            outbox.record(portfolioId, "AGENT_INSIGHT", Map.of(
+                    "title", "Portfolio concentration insight",
+                    "message", symbol + " represents " + percentage + "% of your invested historical cost. Consider reviewing diversification. This is a simulation, not investment advice.",
+                    "targetUrl", "/portfolio"));
+        }
+        return Map.of("status", band, "largestPosition", symbol,
+                "concentrationPercent", percentage, "notificationCreated", emitted > 0);
+    }
+}
+
+===== backend\src\main\java\com\portfoliolab\backend\risk\PortfolioRiskController.java =====
+package com.portfoliolab.backend.risk;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/portfolios/{portfolioId}/risk")
+public class PortfolioRiskController {
+    private final PortfolioRiskAgent agent;
+    public PortfolioRiskController(PortfolioRiskAgent agent) { this.agent = agent; }
+    @PostMapping("/analyze")
+    public Map<String,Object> analyze(@PathVariable long portfolioId) {
+        try { return agent.analyze(portfolioId); }
+        catch (IllegalArgumentException e) { throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage()); }
+    }
+}
+
+===== backend\src\main\java\com\portfoliolab\backend\risk\PortfolioTradeCommitted.java =====
+package com.portfoliolab.backend.risk;
+
+public record PortfolioTradeCommitted(Long portfolioId) {}
+
+===== backend\src\main\java\com\portfoliolab\backend\risk\PortfolioTradeRiskListener.java =====
+package com.portfoliolab.backend.risk;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
+
+@Component
+public class PortfolioTradeRiskListener {
+    private static final Logger log = LoggerFactory.getLogger(PortfolioTradeRiskListener.class);
+    private final PortfolioRiskAgent agent;
+    private final TransactionTemplate newTransaction;
+
+    public PortfolioTradeRiskListener(PortfolioRiskAgent agent, PlatformTransactionManager transactionManager) {
+        this.agent = agent;
+        this.newTransaction = new TransactionTemplate(transactionManager);
+        this.newTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onTradeCommitted(PortfolioTradeCommitted event) {
+        try {
+            var result = newTransaction.execute(status -> agent.analyze(event.portfolioId()));
+            log.info("Automatic risk analysis for portfolio {}: {}", event.portfolioId(), result);
+        } catch (Exception exception) {
+            // A risk analysis failure must not reverse an already committed trade.
+            log.error("Automatic risk analysis failed for portfolio {}", event.portfolioId(), exception);
+        }
+    }
+}
+
+===== frontend\src\app\api\portfolio\history\route.ts =====
+export const instant = false;
+
+export async function GET() {
+  try {
+    const response = await fetch(
+      "http://127.0.0.1:8080/api/portfolios/1/history",
+      { cache: "no-store" }
+    );
+
+    if (!response.ok) {
+      return Response.json(
+        { error: "Unable to retrieve portfolio history" },
+        { status: response.status }
+      );
+    }
+
+    const history = await response.json();
+
+    return Response.json(history, {
+      headers: { "Cache-Control": "no-store" },
+    });
+  } catch {
+    return Response.json(
+      { error: "History service unavailable" },
+      { status: 503 }
+    );
+  }
+}
+
+
+===== frontend\src\app\api\portfolio\notifications\[id]\read\route.ts =====
+import { NextResponse } from "next/server";
+
+const backend = process.env.BACKEND_URL ?? "http://localhost:8080";
+
+export async function PATCH(
+  _request: Request,
+  context: { params: Promise<{ id: string }> }
+) {
+  const { id } = await context.params;
+
+  if (!/^\d+$/.test(id)) {
+    return NextResponse.json(
+      { error: "Invalid notification ID" },
+      { status: 400 }
+    );
+  }
+
+  try {
+    const response = await fetch(
+      `${backend}/api/portfolios/1/notifications/${id}/read`,
+      { method: "PATCH", cache: "no-store" }
+    );
+
+    if (!response.ok) {
+      return NextResponse.json(
+        { error: "Unable to mark notification as read" },
+        { status: response.status }
+      );
+    }
+
+    if (response.status === 204) {
+      return new Response(null, { status: 204 });
+    }
+
+    const body = await response.text();
+
+    return new Response(body || null, {
+      status: response.status,
+      headers: body
+        ? { "Content-Type": response.headers.get("content-type") ?? "application/json" }
+        : undefined,
+    });
+  } catch {
+    return NextResponse.json(
+      { error: "Notification service unavailable" },
+      { status: 503 }
+    );
+  }
+}
+
+===== frontend\src\app\api\portfolio\notifications\route.ts =====
+import { NextResponse } from "next/server";
+
+const backend = process.env.BACKEND_URL ?? "http://localhost:8080";
+
+export async function GET() {
+  try {
+    const response = await fetch(
+      `${backend}/api/portfolios/1/notifications`,
+      { cache: "no-store" }
+    );
+
+    if (!response.ok) {
+      return NextResponse.json(
+        { error: "Unable to retrieve notifications" },
+        { status: response.status }
+      );
+    }
+
+    return NextResponse.json(await response.json(), {
+      headers: { "Cache-Control": "no-store" },
+    });
+  } catch {
+    return NextResponse.json(
+      { error: "Notification service unavailable" },
+      { status: 503 }
+    );
+  }
+}
+
+===== frontend\src\app\api\portfolio\notifications\unread-count\route.ts =====
+import { NextResponse } from "next/server";
+
+const backend = process.env.BACKEND_URL ?? "http://localhost:8080";
+
+export async function GET() {
+  try {
+    const response = await fetch(
+      `${backend}/api/portfolios/1/notifications/unread-count`,
+      { cache: "no-store" }
+    );
+
+    if (!response.ok) {
+      return NextResponse.json(
+        { error: "Unable to retrieve unread count" },
+        { status: response.status }
+      );
+    }
+
+    return NextResponse.json(await response.json(), {
+      headers: { "Cache-Control": "no-store" },
+    });
+  } catch {
+    return NextResponse.json(
+      { error: "Notification service unavailable" },
+      { status: 503 }
+    );
+  }
+}
+
+===== frontend\src\app\api\portfolio\orders\preview\route.ts =====
+import { NextRequest, NextResponse } from "next/server";
+
+const backend = process.env.BACKEND_URL ?? "http://localhost:8080";
+
+export async function POST(request: NextRequest) {
+  let body: unknown;
+
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json(
+      { error: "Invalid JSON request" },
+      { status: 400 }
+    );
+  }
+
+  if (
+    typeof body !== "object" ||
+    body === null ||
+    !("assetId" in body) ||
+    !("type" in body) ||
+    !("quantity" in body)
+  ) {
+    return NextResponse.json(
+      { error: "Missing order fields" },
+      { status: 400 }
+    );
+  }
+
+  const { assetId, type, quantity } = body;
+
+  if (
+    typeof assetId !== "number" ||
+    !Number.isSafeInteger(assetId) ||
+    assetId <= 0 ||
+    (type !== "BUY" && type !== "SELL") ||
+    typeof quantity !== "number" ||
+    !Number.isSafeInteger(quantity) ||
+    quantity <= 0
+  ) {
+    return NextResponse.json(
+      { error: "Invalid asset, order type, or quantity" },
+      { status: 400 }
+    );
+  }
+
+  try {
+    const response = await fetch(
+      `${backend}/api/portfolios/1/orders/preview`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assetId, type, quantity }),
+        cache: "no-store",
+        signal: AbortSignal.timeout(15000),
+      }
+    );
+
+    const result = await response.text();
+
+    return new NextResponse(result, {
+      status: response.status,
+      headers: {
+        "Content-Type":
+          response.headers.get("content-type") ??
+          "application/json",
+        "Cache-Control": "no-store",
+      },
+    });
+  } catch {
+    return NextResponse.json(
+      {
+        error: "Order preview unavailable. No trade was executed.",
+      },
+      { status: 503 }
+    );
+  }
+}
+
+
+===== frontend\src\app\api\portfolio\orders\route.ts =====
+import { NextRequest, NextResponse } from "next/server";
+
+const backend = process.env.BACKEND_URL ?? "http://localhost:8080";
+
+export async function POST(request: NextRequest) {
+  let body: unknown;
+
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json(
+      { error: "Invalid JSON request" },
+      { status: 400 }
+    );
+  }
+
+  if (
+    typeof body !== "object" ||
+    body === null ||
+    !("assetId" in body) ||
+    !("type" in body) ||
+    !("quantity" in body)
+  ) {
+    return NextResponse.json(
+      { error: "Missing order fields" },
+      { status: 400 }
+    );
+  }
+
+  const { assetId, type, quantity } = body;
+
+  if (
+    !Number.isSafeInteger(assetId) ||
+    typeof assetId !== "number" ||
+    assetId <= 0 ||
+    (type !== "BUY" && type !== "SELL") ||
+    typeof quantity !== "number" ||
+    !Number.isSafeInteger(quantity) ||
+    quantity <= 0
+  ) {
+    return NextResponse.json(
+      { error: "Invalid asset, order type, or quantity" },
+      { status: 400 }
+    );
+  }
+
+  try {
+    const response = await fetch(
+      `${backend}/api/portfolios/1/orders`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assetId, type, quantity }),
+        cache: "no-store",
+        signal: AbortSignal.timeout(10000),
+      }
+    );
+
+    const result = await response.text();
+
+    return new NextResponse(result, {
+      status: response.status,
+      headers: {
+        "Content-Type":
+          response.headers.get("content-type") ??
+          "application/json",
+        "Cache-Control": "no-store",
+      },
+    });
+  } catch {
+    return NextResponse.json(
+      {
+        error: "Trading backend unavailable. Check transaction history before retrying.",
+      },
+      { status: 503 }
+    );
+  }
+}
+
+===== frontend\src\app\api\portfolio\price-alerts\[id]\route.ts =====
+import { NextResponse } from "next/server";
+const backend = process.env.BACKEND_URL ?? "http://localhost:8080";
+export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
+  const { id } = await context.params;
+  if (!/^\d+$/.test(id)) return NextResponse.json({ error: "Invalid alert ID" }, { status: 400 });
+  try {
+    const response = await fetch(`${backend}/api/portfolios/1/price-alerts/${id}`, { method: "DELETE", cache: "no-store" });
+    if (response.status === 204) return new Response(null, { status: 204 });
+    return NextResponse.json({ error: "Unable to cancel alert" }, { status: response.status });
+  } catch { return NextResponse.json({ error: "Alert service unavailable" }, { status: 503 }); }
+}
+
+
+===== frontend\src\app\api\portfolio\price-alerts\route.ts =====
+import { NextResponse } from "next/server";
+const backend = process.env.BACKEND_URL ?? "http://localhost:8080";
+export async function GET() {
+  try {
+    const response = await fetch(`${backend}/api/portfolios/1/price-alerts`, { cache: "no-store" });
+    return NextResponse.json(await response.json(), { status: response.status });
+  } catch { return NextResponse.json({ error: "Alert service unavailable" }, { status: 503 }); }
+}
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    const response = await fetch(`${backend}/api/portfolios/1/price-alerts`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), cache: "no-store",
+    });
+    const data = await response.json().catch(() => ({}));
+    return NextResponse.json(data, { status: response.status });
+  } catch { return NextResponse.json({ error: "Unable to create alert" }, { status: 503 }); }
+}
+
+
+===== frontend\src\app\api\portfolio\route.ts =====
+import { NextResponse } from "next/server";
+
+const backend = process.env.BACKEND_URL ?? "http://localhost:8080";
+
+export async function GET() {
+  try {
+    const paths = [
+      "/api/portfolios/1",
+      "/api/portfolios/1/holdings",
+      "/api/portfolios/1/transactions",
+    ];
+
+    const responses = await Promise.all(
+      paths.map((path) =>
+        fetch(`${backend}${path}`, { cache: "no-store" })
+      )
+    );
+
+    if (responses.some((response) => !response.ok)) {
+      return NextResponse.json(
+        { error: "Unable to retrieve portfolio data" },
+        { status: 502 }
+      );
+    }
+
+    const [portfolio, holdings, transactions] =
+      await Promise.all(responses.map((response) => response.json()));
+
+    return NextResponse.json(
+      { portfolio, holdings, transactions },
+      { headers: { "Cache-Control": "no-store" } }
+    );
+  } catch {
+    return NextResponse.json(
+      { error: "Portfolio backend is unavailable" },
+      { status: 503 }
+    );
+  }
+}
+
+===== frontend\src\app\api\portfolio\watchlists\[id]\items\[symbol]\route.ts =====
+import { NextResponse } from "next/server";
+const backend=process.env.BACKEND_URL??"http://localhost:8080";
+type Context={params:Promise<{id:string;symbol:string}>};
+export async function DELETE(_request:Request,context:Context) {
+ const {id,symbol}=await context.params;
+ if(!/^\d+$/.test(id)||! /^[A-Za-z0-9._-]{1,20}$/.test(symbol))return NextResponse.json({error:"Invalid path"},{status:400});
+ try {const r=await fetch(`${backend}/api/portfolios/1/watchlists/${id}/items/${encodeURIComponent(symbol)}`,{method:"DELETE"});return r.status===204?new Response(null,{status:204}):NextResponse.json({error:"Unable to remove asset"},{status:r.status});}
+ catch{return NextResponse.json({error:"Watchlist service unavailable"},{status:503});}
+}
+
+
+===== frontend\src\app\api\portfolio\watchlists\[id]\items\route.ts =====
+import { NextResponse } from "next/server";
+const backend = process.env.BACKEND_URL ?? "http://localhost:8080";
+const base = `${backend}/api/portfolios/1/watchlists`;
+type Context={params:Promise<{id:string}>};
+export async function POST(request:Request,context:Context) {
+ const {id}=await context.params; if(!/^\d+$/.test(id))return NextResponse.json({error:"Invalid ID"},{status:400});
+ try {const r=await fetch(`${base}/${id}/items`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(await request.json())});return r.status===201?NextResponse.json({ok:true},{status:201}):NextResponse.json({error:"Could not add asset (duplicate or invalid symbol)"},{status:r.status});}
+ catch{return NextResponse.json({error:"Watchlist service unavailable"},{status:503});}
+}
+
+
+===== frontend\src\app\api\portfolio\watchlists\[id]\route.ts =====
+import { NextResponse } from "next/server";
+const backend = process.env.BACKEND_URL ?? "http://localhost:8080";
+const base = `${backend}/api/portfolios/1/watchlists`;
+type Context = { params: Promise<{id:string}> };
+export async function PATCH(request:Request,context:Context) {
+ const {id}=await context.params; if(!/^\d+$/.test(id)) return NextResponse.json({error:"Invalid ID"},{status:400});
+ try {const r=await fetch(`${base}/${id}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(await request.json())}); return r.status===204?new Response(null,{status:204}):NextResponse.json({error:"Rename failed"},{status:r.status});}
+ catch{return NextResponse.json({error:"Watchlist service unavailable"},{status:503});}
+}
+export async function DELETE(_request:Request,context:Context) {
+ const {id}=await context.params; if(!/^\d+$/.test(id)) return NextResponse.json({error:"Invalid ID"},{status:400});
+ try {const r=await fetch(`${base}/${id}`,{method:"DELETE"}); return r.status===204?new Response(null,{status:204}):NextResponse.json({error:"Delete failed"},{status:r.status});}
+ catch{return NextResponse.json({error:"Watchlist service unavailable"},{status:503});}
+}
+
+
+===== frontend\src\app\api\portfolio\watchlists\route.ts =====
+import { NextResponse } from "next/server";
+const backend = process.env.BACKEND_URL ?? "http://localhost:8080";
+const base = `${backend}/api/portfolios/1/watchlists`;
+export async function GET() {
+ try { const r=await fetch(base,{cache:"no-store"}); return NextResponse.json(await r.json(),{status:r.status}); }
+ catch { return NextResponse.json({error:"Watchlist service unavailable"},{status:503}); }
+}
+export async function POST(request:Request) {
+ try { const r=await fetch(base,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(await request.json())}); return NextResponse.json(await r.json(),{status:r.status}); }
+ catch { return NextResponse.json({error:"Unable to create watchlist"},{status:503}); }
+}
+
+
+===== frontend\src\app\portfolio\page.tsx =====
+export const instant = false;
+import PortfolioHoldings from "@/components/PortfolioHoldings";
+import { getAssets } from "@/app/assets";
+
+export default async function PortfolioPage() {
+  const assets = await getAssets();
+
+  return <PortfolioHoldings assets={assets} />;
+}
+
+
+
+===== frontend\src\components\PortfolioAllocation.tsx =====
+"use client";
+
+import { useState } from "react";
+import {
+  formatMoney,
+  type Holding,
+  type Portfolio,
+} from "@/components/usePortfolioData";
+
+type Props = {
+  portfolio: Portfolio;
+  holdings: Holding[];
+  totalValue: number;
+  isPortfolioLive: boolean;
+};
+
+const colors = [
+  "#10b981",
+  "#38bdf8",
+  "#a78bfa",
+  "#f59e0b",
+  "#f472b6",
+  "#22d3ee",
+  "#fb7185",
+];
+
+export default function PortfolioAllocation({
+  portfolio,
+  holdings,
+  totalValue,
+  isPortfolioLive,
+}: Props) {
+  const [selectedKey, setSelectedKey] = useState<string>("cash");
+
+  const positions = holdings
+    .filter(
+      (holding) =>
+        Number.isFinite(holding.marketValueInPortfolioCurrency) &&
+        holding.marketValueInPortfolioCurrency > 0
+    )
+    .map((holding, index) => ({
+      key: String(holding.assetId),
+      label: holding.symbol,
+      name: holding.name,
+      value: holding.marketValueInPortfolioCurrency,
+      color: colors[index % colors.length],
+    }));
+
+  const items = [
+    ...positions,
+    {
+      key: "cash",
+      label: "Cash",
+      name: "Available simulated cash",
+      value: Math.max(0, portfolio.cashBalance),
+      color: "#64748b",
+    },
+  ];
+
+  const allocationTotal = items.reduce(
+    (sum, item) => sum + item.value,
+    0
+  );
+
+  const selected =
+    items.find((item) => item.key === selectedKey) ?? items[0];
+
+  if (!Number.isFinite(allocationTotal) || allocationTotal <= 0) {
+    return (
+      <section className="rounded-xl border border-slate-800 bg-slate-900 p-6">
+        <h3 className="text-lg font-semibold">Portfolio Allocation</h3>
+        <p className="mt-3 text-sm text-slate-400">
+          Allocation will appear when your portfolio has a positive value.
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="rounded-xl border border-slate-800 bg-slate-900 p-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h3 className="text-lg font-semibold">
+            Portfolio Allocation
+          </h3>
+          <p className="mt-1 text-sm text-slate-400">
+            Select a segment to explore your portfolio composition.
+          </p>
+        </div>
+
+        <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-400">
+          {isPortfolioLive ? "Live simulated prices" : "Mixed/reference prices"}
+        </span>
+      </div>
+
+      <p className="mt-5 text-xs text-slate-400">
+        Total portfolio value
+      </p>
+      <p className="mt-1 text-2xl font-semibold tabular-nums">
+        {formatMoney(totalValue, portfolio.currency)}
+      </p>
+
+      <div
+        className="mt-5 flex h-5 overflow-hidden rounded-full bg-slate-800"
+        aria-label="Portfolio allocation"
+      >
+        {items
+          .filter((item) => item.value > 0)
+          .map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              title={`${item.label}: ${(
+                (item.value / allocationTotal) *
+                100
+              ).toFixed(1)}%`}
+              aria-label={`Select ${item.label} allocation`}
+              aria-pressed={selected.key === item.key}
+              onClick={() => setSelectedKey(item.key)}
+              className={`h-full cursor-pointer transition-opacity hover:opacity-75 focus-visible:outline-2 focus-visible:outline-white ${
+                selected.key === item.key ? "opacity-100" : "opacity-80"
+              }`}
+              style={{
+                width: `${(item.value / allocationTotal) * 100}%`,
+                backgroundColor: item.color,
+              }}
+            />
+          ))}
+      </div>
+
+      <div className="mt-5 grid gap-2 sm:grid-cols-2">
+        {items.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            onClick={() => setSelectedKey(item.key)}
+            aria-pressed={selected.key === item.key}
+            className={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-3 text-left transition ${
+              selected.key === item.key
+                ? "border-emerald-500 bg-slate-800"
+                : "border-slate-800 hover:border-slate-600"
+            }`}
+          >
+            <span
+              className="h-3 w-3 shrink-0 rounded-sm"
+              style={{ backgroundColor: item.color }}
+            />
+            <span className="min-w-0 flex-1 truncate text-sm">
+              {item.label}
+            </span>
+            <span className="text-sm font-semibold tabular-nums">
+              {((item.value / allocationTotal) * 100).toFixed(1)}%
+            </span>
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-5 rounded-lg border border-slate-700 bg-slate-950/50 p-4">
+        <p className="text-xs uppercase tracking-wide text-slate-400">
+          Selected allocation
+        </p>
+        <h4 className="mt-2 font-semibold">{selected.name}</h4>
+
+        <div className="mt-3 flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <p className="text-xs text-slate-400">Current value</p>
+            <p className="mt-1 text-lg font-semibold tabular-nums">
+              {formatMoney(selected.value, portfolio.currency)}
+            </p>
+          </div>
+          <div className="sm:text-right">
+            <p className="text-xs text-slate-400">Portfolio share</p>
+            <p className="mt-1 text-lg font-semibold tabular-nums">
+              {((selected.value / allocationTotal) * 100).toFixed(1)}%
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <p className="mt-4 text-xs text-slate-500">
+        Allocation includes available cash and uses current simulated
+        valuations in {portfolio.currency}. Values may change with
+        market prices.
+      </p>
+    </section>
+  );
+}
+
+===== frontend\src\components\PortfolioChat.tsx =====
+
+"use client";
+
+import { useState, type FormEvent } from "react";
+
+type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+export default function PortfolioChat() {
+  const [open, setOpen] = useState(false);
+  const [message, setMessage] = useState("");
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  // Local demo portfolio. Replace with the selected
+  // authenticated portfolio when that functionality exists.
+  const portfolioId = 1;
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const question = message.trim();
+
+    if (!question || loading || question.length > 2000) return;
+
+    setMessages((previous) => [
+      ...previous,
+      { role: "user", content: question }
+    ]);
+    setMessage("");
+    setLoading(true);
+
+    try {
+      const response = await fetch("/api/ai/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ portfolioId, message: question })
+      });
+
+      if (!response.ok) {
+        throw new Error("AI request failed");
+      }
+
+      const data = await response.json();
+
+      if (typeof data.reply !== "string") {
+        throw new Error("Invalid AI response");
+      }
+
+      setMessages((previous) => [
+        ...previous,
+        { role: "assistant", content: data.reply }
+      ]);
+    } catch {
+      setMessages((previous) => [
+        ...previous,
+        {
+          role: "assistant",
+          content: "I couldn't connect to PortfolioLab AI. Please check that the local AI service and backend are running."
+        }
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="fixed bottom-5 right-5 z-50">
+      {open && (
+        <section
+          aria-label="PortfolioLab AI chat"
+          className="mb-4 flex h-[min(520px,75vh)] w-[min(380px,calc(100vw-40px))] flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl"
+        >
+          <div className="flex items-center justify-between border-b border-slate-800 px-4 py-4">
+            <div>
+              <h2 className="font-semibold text-white">
+                PortfolioLab AI
+              </h2>
+              <p className="text-xs text-slate-400">
+                Simulated portfolio assistant
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              aria-label="Close chat"
+              className="rounded-lg px-3 py-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+            >
+              ✕
+            </button>
+          </div>
+
+          <div
+            aria-live="polite"
+            className="flex-1 space-y-3 overflow-y-auto p-4"
+          >
+            {messages.length === 0 && (
+              <div className="rounded-xl bg-slate-800 p-3 text-sm text-slate-300">
+                Ask about your simulated holdings, portfolio values, or performance.
+              </div>
+            )}
+
+            {messages.map((item, index) => (
+              <div
+                key={index}
+                className={`max-w-[90%] whitespace-pre-wrap break-words rounded-xl p-3 text-sm ${
+                  item.role === "user"
+                    ? "ml-auto bg-emerald-800 text-emerald-50"
+                    : "mr-auto bg-slate-800 text-slate-200"
+                }`}
+              >
+                {item.content}
+              </div>
+            ))}
+
+            {loading && (
+              <p role="status" className="text-sm text-slate-400">
+                Thinking...
+              </p>
+            )}
+          </div>
+
+          <form
+            onSubmit={handleSubmit}
+            className="flex gap-2 border-t border-slate-800 p-3"
+          >
+            <input
+              type="text"
+              value={message}
+              onChange={(event) => setMessage(event.target.value)}
+              maxLength={2000}
+              placeholder="Ask about your portfolio..."
+              aria-label="Your message"
+              className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500"
+            />
+
+            <button
+              type="submit"
+              disabled={loading || !message.trim()}
+              className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Send
+            </button>
+          </form>
+
+          <p className="pb-2 text-center text-[10px] text-slate-500">
+            Educational simulation · Local AI
+          </p>
+        </section>
+      )}
+
+      <button
+        type="button"
+        onClick={() => setOpen((previous) => !previous)}
+        aria-label={open ? "Close AI assistant" : "Open AI assistant"}
+        aria-expanded={open}
+        className="ml-auto flex h-14 items-center gap-2 rounded-full bg-emerald-500 px-5 font-semibold text-slate-950 shadow-xl hover:bg-emerald-400"
+      >
+        <span aria-hidden="true">✦</span>
+        {open ? "Close" : "Ask AI"}
+      </button>
+    </div>
+  );
+}
+
+
+===== frontend\src\components\PortfolioDashboard.tsx =====
+
+"use client";
+
+import {
+  usePortfolioData,
+  formatMoney,
+} from "@/components/usePortfolioData";
+import TradeForm from "@/components/TradeForm";
+
+
+type Asset = {
+  id: number;
+  symbol: string;
+  name: string;
+  price: number;
+  currency: string;
+};
+
+export default function PortfolioDashboard({
+  assets,
+}: {
+  assets: Asset[];
+}) {
+  const {
+    portfolio,
+    holdings: valuedHoldings,
+    transactions,
+    loading,
+    error,
+    refresh,
+    investedAmount,
+    unrealizedProfitLoss,
+    totalValue,
+    isPortfolioLive,
+  } = usePortfolioData();
+
+  if (loading) {
+    return <p className="text-gray-500">Loading portfolio...</p>;
+  }
+
+  if (error || !portfolio) {
+    return (
+      <p className="text-red-500">
+        {error ?? "Portfolio data unavailable"}
+      </p>
+    );
+  }
+
+  return (    <section className="space-y-6">
+        <TradeForm
+          assets={assets}
+          portfolio={portfolio}
+          holdings={valuedHoldings}
+          onTradeCompleted={refresh}
+        />
+      <div>
+        <h2 className="text-2xl font-semibold">My Portfolio</h2>
+        <p className="text-sm text-gray-500">
+          {portfolio.name} · {portfolio.currency} · Simulated
+        </p>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+  <SummaryCard
+    label="Total Portfolio Value"
+    value={formatMoney(totalValue, portfolio.currency)}
+  />
+
+  <SummaryCard
+    label="Available Cash"
+    value={formatMoney(portfolio.cashBalance, portfolio.currency)}
+  />
+
+  <SummaryCard
+    label="Invested Amount"
+    value={formatMoney(investedAmount, portfolio.currency)}
+  />
+
+  <SummaryCard
+    label="Unrealized P&L (Including FX)"
+    value={formatMoney(unrealizedProfitLoss, portfolio.currency)}
+  />
+</div>
+
+<p className="text-xs text-slate-400">
+  {isPortfolioLive
+    ? "Portfolio valuation uses live simulated market prices."
+    : "Portfolio valuation includes reference prices. Live quotes are unavailable or incomplete."}
+</p>
+
+      <div className="rounded-xl border border-gray-200 p-5 dark:border-gray-800">
+        <h3 className="mb-4 text-lg font-semibold">
+          Your Holdings
+        </h3>
+
+        {valuedHoldings.length === 0 ? (
+          <p className="text-gray-500">
+            You don't own any assets yet.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="border-b border-gray-200 dark:border-gray-800">
+                  <th className="py-3">Asset</th>
+                  <th>Quantity</th>
+                  <th>Average Price</th>
+                  <th>Historical Cost</th><th>Market Value</th>
+                  <th>Unrealized P/L</th>
+                </tr>
+              </thead>
+              <tbody>
+                {valuedHoldings.map((holding) => (
+
+                  <tr
+                    key={holding.assetId}
+                    className="border-b border-gray-100 dark:border-gray-900"
+                  >
+                    <td className="py-3">
+                      <div className="font-medium">
+                        {holding.symbol}
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        {holding.name}
+                      </div>
+                    </td>
+                    <td>{holding.quantity}</td>
+                    <td>
+                      {formatMoney(
+                        holding.averageBuyPrice,
+                        holding.currency
+                      )}
+                    </td>
+                    <td>
+                      {formatMoney(
+                        holding.historicalCostInPortfolioCurrency,
+                        portfolio.currency
+                      )}
+                    </td>
+                    <td>
+                      {formatMoney(
+                        holding.marketValueInPortfolioCurrency,
+                        portfolio.currency
+                      )}
+                    </td>
+                    <td
+                      className={
+                        holding.unrealizedProfitLossInPortfolioCurrency >= 0
+                          ? "text-green-600"
+                          : "text-red-500"
+                      }
+                    >
+                      {formatMoney(
+                        holding.unrealizedProfitLossInPortfolioCurrency,
+                        portfolio.currency
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-xl border border-gray-200 p-5 dark:border-gray-800">
+        <h3 className="mb-4 text-lg font-semibold">
+          Transaction History
+        </h3>
+
+        {transactions.length === 0 ? (
+          <p className="text-gray-500">
+            No transactions recorded.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {transactions.map((transaction) => (
+              <div
+                key={transaction.id}
+                className="flex items-center justify-between border-b border-gray-100 py-2 dark:border-gray-900"
+              >
+                <div>
+                  <p className="font-medium">
+                    <span
+                      className={
+                        transaction.type === "BUY"
+                          ? "text-blue-600"
+                          : "text-green-600"
+                      }
+                    >
+                      {transaction.type}
+                    </span>{" "}
+                    · {transaction.assetSymbol}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    {transaction.quantity} units ·{" "}
+                    {new Date(
+                      transaction.createdAt
+                    ).toLocaleString("en-IN")}
+                  </p>
+                </div>
+                <p className="font-medium">
+                  {formatMoney(
+                    transaction.totalAmount,
+                    transaction.currency
+                  )}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function SummaryCard({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-xl border border-gray-200 p-5 dark:border-gray-800">
+      <p className="mb-2 text-sm text-gray-500">{label}</p>
+      <p className="text-xl font-semibold">{value}</p>
+    </div>
+  );
+}
+
+
+===== frontend\src\components\PortfolioHoldings.tsx =====
+"use client";
+
+import { useState } from "react";
+import TradeForm from "@/components/TradeForm";
+import PortfolioAllocation from "@/components/PortfolioAllocation";
+import {
+  formatMoney,
+  usePortfolioData,
+} from "@/components/usePortfolioData";
+
+type Asset = {
+  id: number;
+  symbol: string;
+  name: string;
+  price: number;
+  currency: string;
+};
+
+export default function PortfolioHoldings({
+  assets,
+}: {
+  assets: Asset[];
+}) {
+  const [holdingTradeRequest, setHoldingTradeRequest] = useState<{
+    assetId: number;
+    sequence: number;
+  } | null>(null);
+
+  function tradeHolding(assetId: number) {
+    setHoldingTradeRequest((previous) => ({
+      assetId,
+      sequence: (previous?.sequence ?? 0) + 1,
+    }));
+
+    document.getElementById("portfolio-trade-ticket")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }
+
+  const {
+    portfolio,
+    holdings,
+    loading,
+    error,
+    refresh,
+    totalValue,
+    isPortfolioLive,
+  } = usePortfolioData();
+
+  if (loading) {
+    return <p className="text-slate-400">Loading portfolio...</p>;
+  }
+
+  if (error || !portfolio) {
+    return <p className="text-red-400">{error ?? "Portfolio unavailable"}</p>;
+  }
+
+  return (
+    <section className="space-y-8">
+      <div>
+        <h2 className="text-2xl font-semibold">
+          Holdings & Trading
+        </h2>
+        <p className="mt-2 text-sm text-slate-400">
+          Available cash:{" "}
+          {formatMoney(
+            portfolio.cashBalance,
+            portfolio.currency
+          )}
+        </p>
+      </div>
+
+      <PortfolioAllocation
+        portfolio={portfolio}
+        holdings={holdings}
+        totalValue={totalValue}
+        isPortfolioLive={isPortfolioLive}
+      />
+
+      <TradeForm
+        assets={assets}
+        portfolio={portfolio}
+        holdings={holdings}
+        onTradeCompleted={refresh}
+        holdingTradeRequest={holdingTradeRequest}
+      />
+
+      <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
+        <div className="border-b border-slate-800 px-6 py-5">
+          <h3 className="text-lg font-semibold">
+            Your Holdings
+          </h3>
+        </div>
+
+        {holdings.length === 0 ? (
+          <p className="p-6 text-slate-400">
+            You don't own any assets yet.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-slate-800/50 text-slate-400">
+                <tr>
+                  <th className="px-6 py-4">Asset</th>
+                  <th className="px-6 py-4">Quantity</th>
+                  <th className="px-6 py-4">Avg. Buy</th>
+                  <th className="px-6 py-4">Historical Cost</th><th className="px-6 py-4">Live Value</th>
+                  <th className="px-6 py-4">Unrealized P&L</th>
+                  <th className="px-6 py-4">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {holdings.map((holding) => (
+                  <tr
+                    key={holding.assetId}
+                    className="border-t border-slate-800"
+                  >
+                    <td className="px-6 py-4">
+                      <p className="font-semibold text-emerald-400">
+                        {holding.symbol}
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        {holding.name}
+                      </p>
+                    </td>
+                    <td className="px-6 py-4">
+                      {holding.quantity}
+                    </td>
+                    <td className="px-6 py-4">
+                      {formatMoney(
+                        holding.averageBuyPrice,
+                        holding.currency
+                      )}
+                    </td>
+                    <td className="px-6 py-4">
+                      {formatMoney(
+                        holding.historicalCostInPortfolioCurrency,
+                        portfolio.currency
+                      )}
+                    </td>
+                    <td className="px-6 py-4">
+                      <div>
+                        <p className="font-medium">
+                          {formatMoney(
+                            holding.marketValue,
+                            holding.currency
+                          )}
+                        </p>
+                        {holding.currency !== portfolio.currency && (
+                          <p className="mt-1 text-xs text-slate-400">
+                            {formatMoney(
+                              holding.marketValueInPortfolioCurrency,
+                              portfolio.currency
+                            )}{" "}
+                            in portfolio currency
+                          </p>
+                        )}
+                      </div>
+                    </td>
+                    <td
+                      className={`px-6 py-4 font-medium ${
+                        holding.unrealizedProfitLossInPortfolioCurrency >= 0
+                          ? "text-emerald-400"
+                          : "text-red-400"
+                      }`}
+                    >
+                      <div>
+                        {formatMoney(
+                          holding.unrealizedProfitLossInPortfolioCurrency,
+                          portfolio.currency
+                        )}
+                        {holding.currency !== portfolio.currency && (
+                          <p className="mt-1 text-xs text-slate-400">
+                            Price-only P&L:{" "}
+                            {formatMoney(
+                              holding.unrealizedProfitLoss,
+                              holding.currency
+                            )}
+                          </p>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <button
+                        type="button"
+                        onClick={() => tradeHolding(holding.assetId)}
+                        className="cursor-pointer whitespace-nowrap rounded-lg border border-emerald-500/50 px-3 py-2 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/10 focus-visible:outline-2 focus-visible:outline-emerald-400"
+                      >
+                        Trade
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+
+===== frontend\src\components\PortfolioPerformanceChart.tsx =====
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+
+type Snapshot = {
+  capturedAt: string;
+  totalValue: number;
+  cashBalance: number;
+  holdingsValue: number;
+  currency: string;
+  valuationSource: string;
+};
+
+type Range = "1H" | "6H" | "1D" | "1W" | "ALL";
+
+const ranges: { label: Range; milliseconds: number | null }[] = [
+  { label: "1H", milliseconds: 60 * 60 * 1000 },
+  { label: "6H", milliseconds: 6 * 60 * 60 * 1000 },
+  { label: "1D", milliseconds: 24 * 60 * 60 * 1000 },
+  { label: "1W", milliseconds: 7 * 24 * 60 * 60 * 1000 },
+  { label: "ALL", milliseconds: null },
+];
+
+const money = (value: number) =>
+  new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+
+export default function PortfolioPerformanceChart({
+  value: _value,
+  ready: _ready,
+}: {
+  value: number;
+  ready: boolean;
+}) {
+  const [history, setHistory] = useState<Snapshot[]>([]);
+  const [range, setRange] = useState<Range>("1H");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    let active = true;
+
+    async function load() {
+      try {
+        const response = await fetch("/api/portfolio/history", {
+          cache: "no-store",
+        });
+
+        if (!response.ok) {
+          throw new Error("History API unavailable");
+        }
+
+        const result: Snapshot[] = await response.json();
+
+        if (active) {
+          setHistory(result);
+          setNow(Date.now());
+          setError(null);
+        }
+      } catch (cause) {
+        if (active) {
+          setError(
+            cause instanceof Error ? cause.message : "Unable to load history"
+          );
+        }
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+
+    void load();
+
+    const interval = setInterval(() => {
+      void load();
+    }, 30000);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  const selectedRange = ranges.find((item) => item.label === range)!;
+
+  const chartData = useMemo(() => {
+    const cutoff =
+      selectedRange.milliseconds === null
+        ? null
+        : now - selectedRange.milliseconds;
+
+    return history
+      .map((item) => ({
+        time: new Date(item.capturedAt).getTime(),
+        value: Number(item.totalValue),
+      }))
+      .filter(
+        (item) =>
+          Number.isFinite(item.time) &&
+          Number.isFinite(item.value) &&
+          (cutoff === null || item.time >= cutoff)
+      )
+      .sort((a, b) => a.time - b.time);
+  }, [history, selectedRange.milliseconds, now]);
+
+  const first = chartData[0]?.value;
+  const last = chartData[chartData.length - 1]?.value;
+
+  const change =
+    first !== undefined && last !== undefined
+      ? last - first
+      : null;
+
+  const changePercent =
+    change !== null && first !== undefined && first !== 0
+      ? (change / first) * 100
+      : null;
+
+  const positive = (change ?? 0) >= 0;
+
+  return (
+    <section className="rounded-xl border border-slate-800 bg-slate-900 p-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-sm text-slate-400">
+            Portfolio Value History
+          </p>
+
+          <h3 className="mt-2 text-3xl font-semibold text-white">
+            {last !== undefined ? money(last) : "—"}
+          </h3>
+
+          {change !== null && (
+            <p
+              className={`mt-2 text-sm font-medium ${
+                positive ? "text-emerald-400" : "text-red-400"
+              }`}
+            >
+              {positive ? "+" : ""}
+              {money(change)}
+              {changePercent !== null &&
+                ` (${positive ? "+" : ""}${changePercent.toFixed(2)}%)`}
+              <span className="ml-2 font-normal text-slate-400">
+                recorded value change
+              </span>
+            </p>
+          )}
+        </div>
+
+        <div className="flex flex-wrap gap-1 rounded-lg border border-slate-700 bg-slate-950 p-1">
+          {ranges.map((item) => (
+            <button
+              key={item.label}
+              type="button"
+              onClick={() => setRange(item.label)}
+              aria-pressed={range === item.label}
+              className={`rounded-md px-3 py-2 text-xs font-medium transition-colors ${
+                range === item.label
+                  ? "bg-emerald-500 text-slate-950"
+                  : "text-slate-400 hover:bg-slate-800 hover:text-white"
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-7 h-72">
+        {error ? (
+          <div className="flex h-full items-center justify-center text-sm text-red-400">
+            {error}
+          </div>
+        ) : loading ? (
+          <div className="flex h-full items-center justify-center text-sm text-slate-400">
+            Loading recorded history...
+          </div>
+        ) : chartData.length < 2 ? (
+          <div className="flex h-full items-center justify-center text-center text-sm text-slate-400">
+            Not enough recorded observations for {range}.
+            <br />
+            Keep the simulator and backend running.
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={chartData}>
+              <defs>
+                <linearGradient
+                  id="portfolioHistoryFill"
+                  x1="0"
+                  y1="0"
+                  x2="0"
+                  y2="1"
+                >
+                  <stop
+                    offset="0%"
+                    stopColor="#34d399"
+                    stopOpacity={0.25}
+                  />
+                  <stop
+                    offset="100%"
+                    stopColor="#34d399"
+                    stopOpacity={0}
+                  />
+                </linearGradient>
+              </defs>
+
+              <CartesianGrid
+                stroke="#334155"
+                strokeDasharray="3 3"
+                vertical={false}
+              />
+
+              <XAxis
+                dataKey="time"
+                type="number"
+                scale="time"
+                domain={["dataMin", "dataMax"]}
+                stroke="#94a3b8"
+                tick={{ fontSize: 11 }}
+                minTickGap={35}
+                tickFormatter={(timestamp: number) =>
+                  new Date(timestamp).toLocaleTimeString("en-IN", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })
+                }
+              />
+
+              <YAxis
+                domain={["auto", "auto"]}
+                stroke="#94a3b8"
+                tick={{ fontSize: 11 }}
+                width={100}
+                tickFormatter={(value: number) =>
+                  `₹${Math.round(value).toLocaleString("en-IN")}`
+                }
+              />
+
+              <Tooltip
+                labelFormatter={(timestamp) =>
+                  new Date(Number(timestamp)).toLocaleString("en-IN")
+                }
+                formatter={(value) => [
+                  money(Number(value)),
+                  "Portfolio value",
+                ]}
+                contentStyle={{
+                  backgroundColor: "#0f172a",
+                  border: "1px solid #334155",
+                  borderRadius: "10px",
+                  color: "#f8fafc",
+                }}
+              />
+
+              <Area
+                type="monotone"
+                dataKey="value"
+                stroke="#34d399"
+                strokeWidth={2}
+                fill="url(#portfolioHistoryFill)"
+                isAnimationActive={false}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+
+      <div className="mt-5 flex flex-wrap justify-between gap-2 border-t border-slate-800 pt-4 text-xs text-slate-500">
+        <span>
+          {chartData.length} observations in selected range
+        </span>
+        <span>
+          PostgreSQL · Go simulated prices · 30s recording
+        </span>
+      </div>
+
+      <p className="mt-3 text-xs text-slate-500">
+        Change represents the difference between recorded portfolio
+        values, not investment returns. Available history is limited
+        to the latest 240 snapshots returned by the API.
+      </p>
+    </section>
+  );
+}
+
+===== frontend\src\components\portfolioValuation.ts =====
+export type ValuationHolding = {
+  quantity: number;
+  averageBuyPrice: number;
+  currentPrice: number;
+  currentFxRate: number;
+  historicalCostInPortfolioCurrency: number;
+};
+
+export function valueHolding<T extends ValuationHolding>(
+  holding: T,
+  currentPrice: number
+) {
+  const fxRate = holding.currentFxRate;
+  const historicalCost =
+    holding.historicalCostInPortfolioCurrency;
+
+  if (!Number.isFinite(fxRate) || fxRate <= 0) {
+    throw new Error("Invalid FX rate for portfolio valuation");
+  }
+
+  if (!Number.isFinite(currentPrice) || currentPrice < 0) {
+    throw new Error("Invalid market price for portfolio valuation");
+  }
+
+  if (
+    !Number.isFinite(historicalCost) ||
+    historicalCost < 0
+  ) {
+    throw new Error("Invalid historical cost for portfolio valuation");
+  }
+
+  const marketValue = holding.quantity * currentPrice;
+
+  const assetCurrencyCostBasis =
+    holding.quantity * holding.averageBuyPrice;
+
+  const marketValueInPortfolioCurrency =
+    marketValue * fxRate;
+
+  const unrealizedProfitLossInPortfolioCurrency =
+    marketValueInPortfolioCurrency - historicalCost;
+
+  return {
+    ...holding,
+    currentPrice,
+    marketValue,
+
+    // Price-only P&L in the asset's own currency.
+    unrealizedProfitLoss:
+      marketValue - assetCurrencyCostBasis,
+
+    marketValueInPortfolioCurrency,
+
+    // Historical cost remains fixed at executed trade FX.
+    historicalCostInPortfolioCurrency: historicalCost,
+
+    // Includes both market-price and FX movements.
+    unrealizedProfitLossInPortfolioCurrency,
+
+    // Retained for price-only attribution at current FX.
+    costBasisAtCurrentFx:
+      assetCurrencyCostBasis * fxRate,
+
+    unrealizedProfitLossAtCurrentFx:
+      (marketValue - assetCurrencyCostBasis) * fxRate,
+  };
+}
+
+export function summarizeHoldings<
+  T extends {
+    marketValueInPortfolioCurrency: number;
+    historicalCostInPortfolioCurrency: number;
+  }
+>(
+  holdings: T[],
+  cashBalance: number
+) {
+  const holdingsValue = holdings.reduce(
+    (sum, holding) =>
+      sum + holding.marketValueInPortfolioCurrency,
+    0
+  );
+
+  const investedAmount = holdings.reduce(
+    (sum, holding) =>
+      sum + holding.historicalCostInPortfolioCurrency,
+    0
+  );
+
+  return {
+    holdingsValue,
+    investedAmount,
+    unrealizedProfitLoss:
+      holdingsValue - investedAmount,
+    totalValue: cashBalance + holdingsValue,
+  };
+}
+
+===== frontend\src\components\usePortfolioData.ts =====
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { useMarketPrices } from "@/components/MarketPriceProvider";
+import {
+  valueHolding,
+  summarizeHoldings,
+} from "@/components/portfolioValuation";
+
+export type Portfolio = {
+  id: number;
+  name: string;
+  cashBalance: number;
+  currency: string;
+};
+
+export type Holding = {
+  assetId: number;
+  symbol: string;
+  name: string;
+  quantity: number;
+  averageBuyPrice: number;
+  currentPrice: number;
+  marketValue: number;
+  unrealizedProfitLoss: number;
+  currency: string;
+  currentFxRate: number;
+  marketValueInPortfolioCurrency: number;
+  portfolioCurrency: string;
+  historicalCostInPortfolioCurrency: number;
+  unrealizedProfitLossInPortfolioCurrency: number;
+};
+
+export type Transaction = {
+  id: number;
+  assetSymbol: string;
+  type: string;
+  quantity: number;
+  pricePerUnit: number;
+  totalAmount: number;
+  currency: string;
+  createdAt: string;
+};
+
+type PortfolioData = {
+  portfolio: Portfolio;
+  holdings: Holding[];
+  transactions: Transaction[];
+};
+
+export function formatMoney(value: number, currency: string) {
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+export function usePortfolioData() {
+  const [data, setData] = useState<PortfolioData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const { prices, status } = useMarketPrices();
+
+  const refresh = useCallback(async () => {
+    const response = await fetch("/api/portfolio", {
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      throw new Error("Unable to load portfolio data");
+    }
+
+    const result: PortfolioData = await response.json();
+    setData(result);
+    setError(null);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    async function load() {
+      try {
+        const response = await fetch("/api/portfolio", {
+          cache: "no-store",
+        });
+
+        if (!response.ok) {
+          throw new Error("Unable to load portfolio data");
+        }
+
+        const result: PortfolioData = await response.json();
+
+        if (active) {
+          setData(result);
+          setError(null);
+        }
+      } catch (err) {
+        if (active) {
+          setError(
+            err instanceof Error ? err.message : "Unknown error"
+          );
+        }
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+
+    void load();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const livePriceBySymbol = new Map(
+    prices.map((price) => [price.symbol, price])
+  );
+
+  const holdings = (data?.holdings ?? []).map((holding) => {
+    const quote = livePriceBySymbol.get(holding.symbol);
+
+    const priceIsLive =
+      status === "connected" &&
+      quote?.currency === holding.currency;
+
+    const currentPrice = priceIsLive
+      ? quote.price
+      : holding.currentPrice;
+
+    const fxRate =
+      holding.currency === data?.portfolio.currency
+        ? 1
+        : holding.currentFxRate;
+
+    return {
+      ...valueHolding(
+        { ...holding, currentFxRate: fxRate },
+        currentPrice
+      ),
+      priceIsLive,
+    };
+  });
+
+  const {
+    holdingsValue,
+    investedAmount,
+    unrealizedProfitLoss,
+    totalValue,
+  } = summarizeHoldings(
+    holdings,
+    data?.portfolio.cashBalance ?? 0
+  );
+  const isPortfolioLive =
+    holdings.length > 0 &&
+    holdings.every((holding) => holding.priceIsLive);
+
+  return {
+    portfolio: data?.portfolio ?? null,
+    holdings,
+    transactions: data?.transactions ?? [],
+    loading,
+    error,
+    refresh,
+    holdingsValue,
+    investedAmount,
+    unrealizedProfitLoss,
+    totalValue,
+    isPortfolioLive,
+  };
+}
+
+

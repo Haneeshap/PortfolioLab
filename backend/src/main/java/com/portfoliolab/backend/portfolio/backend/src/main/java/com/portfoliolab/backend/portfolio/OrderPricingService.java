@@ -63,7 +63,8 @@ public class OrderPricingService {
         BigDecimal price = quote.price()
                 .setScale(4, RoundingMode.HALF_UP);
 
-        BigDecimal assetTotal = price.multiply(quantity);
+        BigDecimal assetTotal = price.multiply(quantity)
+                .setScale(4, RoundingMode.HALF_UP);
 
         if (assetTotal.precision() > 19 || assetTotal.scale() > 4) {
             throw new ResponseStatusException(
@@ -118,3 +119,4 @@ public class OrderPricingService {
             BigDecimal portfolioTotal
     ) {}
 }
+

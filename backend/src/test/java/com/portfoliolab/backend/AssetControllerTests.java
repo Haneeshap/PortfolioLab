@@ -20,7 +20,7 @@ class AssetControllerTests {
     void shouldReturnSeededAssets() throws Exception {
         mockMvc.perform(get("/api/assets"))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.length()").value(5))
+            .andExpect(jsonPath("$.length()").value(25))
             .andExpect(jsonPath("$[?(@.symbol == 'DEMO')]").exists())
             .andExpect(jsonPath("$[?(@.symbol == 'NOVA')]").exists());
     }

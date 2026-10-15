@@ -21,6 +21,7 @@ public class OrderService {
     private final HoldingRepository holdingRepository;
     private final TransactionRepository transactionRepository;
     private final OrderPricingService pricingService;
+    private final com.portfoliolab.backend.risk.PreTradeRiskService preTradeRiskService;
     private final NotificationOutbox notificationOutbox;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -30,6 +31,7 @@ public class OrderService {
             HoldingRepository holdingRepository,
             TransactionRepository transactionRepository,
             OrderPricingService pricingService,
+            com.portfoliolab.backend.risk.PreTradeRiskService preTradeRiskService,
             NotificationOutbox notificationOutbox,
             ApplicationEventPublisher eventPublisher
     ) {
@@ -38,6 +40,7 @@ public class OrderService {
         this.holdingRepository = holdingRepository;
         this.transactionRepository = transactionRepository;
         this.pricingService = pricingService;
+        this.preTradeRiskService = preTradeRiskService;
         this.notificationOutbox = notificationOutbox;
         this.eventPublisher = eventPublisher;
     }
@@ -99,6 +102,8 @@ public class OrderService {
         Holding holding = holdingRepository
                 .findByPortfolioIdAndAssetId(portfolioId, asset.getId())
                 .orElse(null);
+
+        preTradeRiskService.enforce(portfolio, asset, type, quantity, portfolioAmount);
 
         if (type.equals("BUY")) {
             processBuy(portfolio, asset, holding, quantity, price, portfolioAmount);

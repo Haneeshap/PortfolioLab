@@ -40,7 +40,7 @@ void setUp() {
             mock(AssetRepository.class),
             mock(HoldingRepository.class),
             mock(TransactionRepository.class),
-            new OrderPricingService(mock(MarketService.class), mock(FrankfurterRateService.class)), org.mockito.Mockito.mock(NotificationOutbox.class), org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
+            new OrderPricingService(mock(MarketService.class), mock(FrankfurterRateService.class)), org.mockito.Mockito.mock(com.portfoliolab.backend.risk.PreTradeRiskService.class), org.mockito.Mockito.mock(NotificationOutbox.class), org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
 }
 
     @Test
@@ -117,7 +117,7 @@ void setUp() {
     FrankfurterRateService fx = mock(FrankfurterRateService.class);
 
     OrderService service = new OrderService(
-            portfolios, assets, holdings, transactions, new OrderPricingService(market, fx), org.mockito.Mockito.mock(NotificationOutbox.class), org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
+            portfolios, assets, holdings, transactions, new OrderPricingService(market, fx), org.mockito.Mockito.mock(com.portfoliolab.backend.risk.PreTradeRiskService.class), org.mockito.Mockito.mock(NotificationOutbox.class), org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
 
     when(portfolios.findByIdForUpdate(1L))
             .thenReturn(Optional.of(portfolio));
@@ -185,7 +185,7 @@ void setUp() {
         FrankfurterRateService fx = mock(FrankfurterRateService.class);
 
         OrderService service = new OrderService(
-                portfolios, assets, holdings, transactions, new OrderPricingService(market, fx), org.mockito.Mockito.mock(NotificationOutbox.class), org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
+                portfolios, assets, holdings, transactions, new OrderPricingService(market, fx), org.mockito.Mockito.mock(com.portfoliolab.backend.risk.PreTradeRiskService.class), org.mockito.Mockito.mock(NotificationOutbox.class), org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
 
         when(portfolios.findByIdForUpdate(1L))
                 .thenReturn(java.util.Optional.of(portfolio));
@@ -243,7 +243,7 @@ void setUp() {
         FrankfurterRateService fx = mock(FrankfurterRateService.class);
 
         OrderService service = new OrderService(
-                portfolios, assets, holdings, transactions, new OrderPricingService(market, fx), org.mockito.Mockito.mock(NotificationOutbox.class), org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
+                portfolios, assets, holdings, transactions, new OrderPricingService(market, fx), org.mockito.Mockito.mock(com.portfoliolab.backend.risk.PreTradeRiskService.class), org.mockito.Mockito.mock(NotificationOutbox.class), org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
 
         when(portfolios.findByIdForUpdate(1L))
                 .thenReturn(java.util.Optional.of(portfolio));
@@ -311,7 +311,7 @@ void setUp() {
         FrankfurterRateService fx = mock(FrankfurterRateService.class);
 
         OrderService service = new OrderService(
-                portfolios, assets, holdings, transactions, new OrderPricingService(market, fx), org.mockito.Mockito.mock(NotificationOutbox.class), org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
+                portfolios, assets, holdings, transactions, new OrderPricingService(market, fx), org.mockito.Mockito.mock(com.portfoliolab.backend.risk.PreTradeRiskService.class), org.mockito.Mockito.mock(NotificationOutbox.class), org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
 
         when(portfolios.findByIdForUpdate(1L))
                 .thenReturn(java.util.Optional.of(portfolio));

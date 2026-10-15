@@ -9,8 +9,8 @@ func TestSimulatorInitialPrices(t *testing.T) {
 
 	prices := simulator.GetPrices()
 
-	if len(prices) != 5 {
-		t.Fatalf("expected 5 assets, got %d", len(prices))
+	if len(prices) != 25 {
+		t.Fatalf("expected 25 assets, got %d", len(prices))
 	}
 
 	for _, asset := range prices {

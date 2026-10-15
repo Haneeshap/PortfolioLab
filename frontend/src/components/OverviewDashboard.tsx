@@ -1,4 +1,3 @@
-﻿
 "use client";
 
 import PortfolioPerformanceChart from "@/components/PortfolioPerformanceChart";
@@ -17,15 +16,14 @@ function Metric({
   accent?: boolean;
 }) {
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
-      <p className="text-sm text-slate-400">{label}</p>
+    <div className="pl-metric">
+      <p className="pl-metric-label">{label}</p>
       <p
-        className={`mt-3 text-2xl font-semibold ${
-          accent ? "text-emerald-400" : "text-white"
-        }`}
+        className={`pl-metric-value ${accent ? "positive" : ""}`}
       >
         {value}
       </p>
+      <p className="pl-metric-foot">SIMULATED ACCOUNT</p>
     </div>
   );
 }
@@ -55,17 +53,16 @@ export default function OverviewDashboard() {
   }
 
   return (
-    <section className="space-y-7">
-      <div>
-        <h2 className="text-2xl font-semibold">
-          Your Investment Overview
-        </h2>
-        <p className="mt-2 text-sm text-slate-400">
-          {portfolio.name} - Fictional investment portfolio
-        </p>
+    <section className="pl-overview">
+      <div className="pl-overview-hero">
+        <div><span className="pl-overview-eyebrow">YOUR FINANCIAL WORKSPACE</span>
+          <h2>Portfolio at a glance<span style={{color:"var(--pl-accent)"}}>.</span></h2>
+          <p>{portfolio.name} · Fictional investment portfolio</p>
+        </div>
+        <div className="pl-overview-tag"><span className="pl-live-dot" /> {isPortfolioLive ? "Live simulated valuation" : "Reference valuation"}</div>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="pl-metrics">
         <Metric
           label="Total Portfolio Value"
           value={formatMoney(totalValue, portfolio.currency)}
@@ -99,13 +96,13 @@ export default function OverviewDashboard() {
         ready={isPortfolioLive || holdings.length === 0}
       />
 
-      <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
+      <div className="pl-snapshot">
         <h3 className="text-lg font-semibold">
           Portfolio Snapshot
         </h3>
 
-        <div className="mt-5 grid gap-4 sm:grid-cols-2">
-          <div>
+        <div className="pl-snapshot-grid">
+          <div className="pl-snapshot-stat">
             <p className="text-sm text-slate-400">
               Assets currently held
             </p>
@@ -114,7 +111,7 @@ export default function OverviewDashboard() {
             </p>
           </div>
 
-          <div>
+          <div className="pl-snapshot-stat">
             <p className="text-sm text-slate-400">
               Market valuation
             </p>
@@ -127,7 +124,7 @@ export default function OverviewDashboard() {
         </div>
       </div>
 
-      <p className="text-xs text-slate-500">
+      <p className="pl-overview-disclaimer">
         Unrealized P&L reflects simulated valuations.
         Orders execute at backend reference prices.
       </p>

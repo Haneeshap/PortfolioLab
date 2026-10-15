@@ -1,0 +1,32 @@
+"use client";
+import {useCallback,useEffect,useMemo,useState,type FormEvent} from "react";
+import Link from "next/link";
+import {useMarketPrices} from "@/components/MarketPriceProvider";
+type Watchlist={id:number;name:string;symbols:string[]};
+export default function WatchlistsPage(){
+ const {prices,status}=useMarketPrices();
+ const [lists,setLists]=useState<Watchlist[]>([]);
+ const [selected,setSelected]=useState<number|null>(null);
+ const [name,setName]=useState(""); const [search,setSearch]=useState("");
+ const [error,setError]=useState("");const [busy,setBusy]=useState(false);
+ const load=useCallback(async()=>{try{const r=await fetch("/api/portfolio/watchlists",{cache:"no-store"});if(!r.ok)throw Error("Unable to load watchlists");const data:Watchlist[]=await r.json();setLists(data);setSelected(prev=>data.some(x=>x.id===prev)?prev:(data[0]?.id??null));}catch(e){setError(e instanceof Error?e.message:"Request failed");}},[]);
+ useEffect(()=>{void load()},[load]);
+ const current=lists.find(x=>x.id===selected);
+ const quoteMap=useMemo(()=>new Map(prices.map(p=>[p.symbol,p])),[prices]);
+ const available=useMemo(()=>prices.filter(p=>!current?.symbols.includes(p.symbol)&&p.symbol.toLowerCase().includes(search.toLowerCase())).sort((a,b)=>a.symbol.localeCompare(b.symbol)),[prices,current,search]);
+ const money=(symbol:string)=>{const q=quoteMap.get(symbol);return q?new Intl.NumberFormat("en-IN",{style:"currency",currency:q.currency,maximumFractionDigits:2}).format(q.price):"Waiting for quote"};
+ async function action(url:string,method:string,body?:object){setBusy(true);setError("");try{const r=await fetch(url,{method,headers:body?{"Content-Type":"application/json"}:undefined,body:body?JSON.stringify(body):undefined});if(!r.ok){const data=await r.json().catch(()=>({}));throw Error(data.error||`Request failed (${r.status})`)}await load();return true;}catch(e){setError(e instanceof Error?e.message:"Request failed");return false;}finally{setBusy(false)}}
+ async function create(e:FormEvent){e.preventDefault();if(await action("/api/portfolio/watchlists","POST",{name}))setName("")}
+ return <div className="space-y-6">
+ <header><h2 className="text-2xl font-semibold">Smart Watchlists</h2><p className="mt-2 text-sm text-slate-400">Organize fictional assets and follow live simulated prices. {status==="connected"?"● Market connected":"● Market reconnecting"}</p></header>
+ <form onSubmit={create} className="flex flex-wrap gap-3 rounded-xl border border-slate-800 bg-slate-900 p-4"><input aria-label="New watchlist name" value={name} onChange={e=>setName(e.target.value)} maxLength={80} required placeholder="New watchlist name" className="min-w-52 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2"/><button disabled={busy} className="rounded-lg bg-emerald-500 px-4 py-2 font-semibold text-slate-950 disabled:opacity-50">Create watchlist</button></form>
+ {error&&<p role="alert" className="text-sm text-rose-400">{error}</p>}
+ <div className="flex flex-wrap gap-2">{lists.map(w=><button key={w.id} onClick={()=>setSelected(w.id)} className={`rounded-lg border px-4 py-2 text-sm ${selected===w.id?"border-emerald-500 bg-emerald-500/10 text-emerald-300":"border-slate-700 text-slate-300"}`}>{w.name} <span className="text-slate-500">({w.symbols.length})</span></button>)}</div>
+ {!current?<section className="rounded-xl border border-dashed border-slate-700 p-8 text-center text-slate-400">Create your first watchlist to get started.</section>:<div className="space-y-5">
+ <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900 p-4"><div><h3 className="font-semibold">{current.name}</h3><p className="text-xs text-slate-400">{current.symbols.length} tracked assets</p></div><div className="flex gap-2"><button disabled={busy} onClick={()=>{const next=window.prompt("Rename watchlist",current.name);if(next&&next.trim()&&next.trim()!==current.name)void action(`/api/portfolio/watchlists/${current.id}`,"PATCH",{name:next.trim()})}} className="rounded-lg border border-slate-700 px-3 py-2 text-sm">Rename</button><button disabled={busy} onClick={()=>{if(window.confirm(`Delete ${current.name}?`))void action(`/api/portfolio/watchlists/${current.id}`,"DELETE")}} className="rounded-lg border border-rose-900 px-3 py-2 text-sm text-rose-300">Delete</button></div></section>
+ <section className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900"><h3 className="border-b border-slate-800 p-4 font-semibold">Tracked assets</h3>{current.symbols.length===0?<p className="p-5 text-sm text-slate-400">No assets yet. Add some below.</p>:<div className="divide-y divide-slate-800">{current.symbols.map(s=><div key={s} className="flex flex-wrap items-center justify-between gap-3 p-4"><div><p className="font-semibold text-emerald-300">{s}</p><p className="text-sm tabular-nums text-slate-300">{money(s)}</p></div><div className="flex gap-3"><Link href={`/alerts?symbol=${encodeURIComponent(s)}`} className="rounded-lg border border-emerald-800 px-3 py-2 text-sm text-emerald-300">Set alert ↗</Link><button disabled={busy} onClick={()=>void action(`/api/portfolio/watchlists/${current.id}/items/${encodeURIComponent(s)}`,"DELETE")} className="rounded-lg border border-slate-700 px-3 py-2 text-sm">Remove</button></div></div>)}</div>}</section>
+ <section className="rounded-xl border border-slate-800 bg-slate-900 p-4"><h3 className="font-semibold">Add an asset</h3><input aria-label="Search symbols" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search fictional symbols..." className="mt-3 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2"/><div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{available.map(p=><div key={p.symbol} className="flex items-center justify-between gap-2 rounded-lg border border-slate-800 p-3"><div><p className="font-medium">{p.symbol}</p><p className="text-xs text-slate-400">{money(p.symbol)}</p></div><button disabled={busy} onClick={()=>void action(`/api/portfolio/watchlists/${current.id}/items`,"POST",{symbol:p.symbol})} className="rounded-lg bg-slate-800 px-3 py-2 text-sm text-emerald-300 disabled:opacity-50">+ Add</button></div>)}</div>{prices.length===0&&<p className="mt-3 text-sm text-amber-300">Waiting for the Go market simulator...</p>}</section>
+ </div>}
+ <p className="text-xs text-slate-500">Educational simulation. Prices are fictional and may reset when the simulator restarts.</p>
+ </div>
+}

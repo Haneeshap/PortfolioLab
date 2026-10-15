@@ -5,6 +5,8 @@ import { useSearchParams } from "next/navigation";
 import { useMarketPrices } from "./MarketPriceProvider";
 import type { Portfolio, Holding } from "./usePortfolioData";
 import { assessOrder, parseRuleResult } from "./orderAssessment";
+import RecentOrders from "./RecentOrders";
+import { DEMO_PORTFOLIO_ID, submitSimulatedOrder, type SimulatedOrder } from "@/lib/simulated-orders";
 type Asset = {
   id: number;
   symbol: string;
@@ -54,12 +56,6 @@ type OrderPreview = {
   disclaimer: string;
 };
 
-type OrderResult = {
-  pricePerUnit: number;
-  totalAmount: number;
-  currency: string;
-};
-
 export default function TradeForm({
   assets,
   portfolio,
@@ -100,6 +96,8 @@ export default function TradeForm({
   const [type, setType] = useState<"BUY" | "SELL">("BUY");
   const [quantity, setQuantity] = useState("1");
   const [submitting, setSubmitting] = useState(false);
+  const submissionInFlight = useRef(false);
+  const [submittedOrder, setSubmittedOrder] = useState<SimulatedOrder | null>(null);
   const [market, setMarket] = useState<Market>("NSE");
   const [validating, setValidating] = useState(false);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
@@ -291,6 +289,7 @@ export default function TradeForm({
     if (
       validating ||
       submitting ||
+      submissionInFlight.current ||
       !selectedAsset ||
       !validQuantity ||
       !quoteIsValid ||
@@ -432,6 +431,7 @@ setValidatedKey(requestKey);
 
     if (
       submitting ||
+      submissionInFlight.current ||
       !selectedAsset ||
       !validQuantity ||
       !quoteIsValid
@@ -439,58 +439,32 @@ setValidatedKey(requestKey);
       return;
     }
 
+    if (portfolio.id !== DEMO_PORTFOLIO_ID) {
+      setError("Trading is available for demo portfolio 1 only.");
+      return;
+    }
+
+    submissionInFlight.current = true;
     setSubmitting(true);
     setMessage(null);
     setError(null);
 
     try {
-      const response = await fetch("/api/portfolio/orders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          assetId: selectedAsset.id,
-          type,
-          quantity: parsedQuantity,
-        }),
-      });
-
-      if (!response.ok) {
-        const body = await response.text();
-
-        if (
-          response.status === 400 &&
-          body.includes("Insufficient virtual cash")
-        ) {
-          throw new Error(
-            "Insufficient simulated cash for this order. Reduce the quantity or choose a less expensive asset."
-          );
-        }
-
-        throw new Error(
-          `Unable to execute this simulated order (${response.status}). Please review the order details and try again.`
-        );
-      }
-
-      const result: OrderResult = await response.json();
+      const result = await submitSimulatedOrder({ assetId: selectedAsset.id, type, quantity: parsedQuantity });
+      setSubmittedOrder(result);
 
       setMessage(
-        `${type} executed: ${parsedQuantity} ${selectedAsset.symbol} at ${formatMoney(result.pricePerUnit, result.currency)} per unit. Total: ${formatMoney(result.totalAmount, result.currency)}.`
+        `Order #${result.id} submitted. Initial status: ${result.status}. Track execution and fills in Recent Orders.`
       );
 
       setQuantity("1");
 
-      try {
-        await onTradeCompleted();
-      } catch {
-        setError(
-          "Order executed, but the portfolio could not refresh. Check transaction history before placing another order."
-        );
-      }
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Order failed"
       );
     } finally {
+      submissionInFlight.current = false;
       setSubmitting(false);
     }
   }
@@ -500,9 +474,9 @@ setValidatedKey(requestKey);
       <h3 className="text-xl font-semibold">Simulated Trading</h3>
 
       <p className="mt-2 text-sm text-slate-400">
-        Execute fictional BUY and SELL orders using live simulated
-        market prices. Final execution prices may differ slightly
-        from the estimate.
+        Submit fictional BUY and SELL orders for asynchronous execution using simulated
+        market prices. Orders may partially fill, be rejected, or be cancelled.
+        Final prices may differ from the preview. Cash and shares are not reserved on submission.
       </p>
 
       <div className="mt-6 grid items-start gap-6 lg:grid-cols-2">
@@ -635,7 +609,7 @@ setValidatedKey(requestKey);
           }
           className="rounded-lg bg-emerald-500 px-6 py-3 font-semibold text-slate-950 disabled:opacity-50"
         >
-          {submitting ? "Processing..." : `Execute ${type}`}
+          {submitting ? "Submitting..." : `Submit ${type}`}
         </button>
           </form>
         </div>
@@ -857,6 +831,7 @@ setValidatedKey(requestKey);
           {error}
         </p>
       )}
+      <RecentOrders submittedOrder={submittedOrder} onOrdersChanged={onTradeCompleted} assets={assets} />
     </section>
   );
 }

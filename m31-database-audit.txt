@@ -1,0 +1,433 @@
+﻿===== V1__create_assets_table.sql =====
+CREATE TABLE assets (
+    id BIGSERIAL PRIMARY KEY,
+    symbol VARCHAR(20) NOT NULL UNIQUE,
+    name VARCHAR(150) NOT NULL,
+    price NUMERIC(19, 4) NOT NULL CHECK (price >= 0),
+    currency VARCHAR(3) NOT NULL
+);
+
+===== V10__portfolio_events.sql =====
+CREATE TABLE simulated_dividend_payments (
+    id BIGSERIAL PRIMARY KEY,
+    portfolio_id BIGINT NOT NULL REFERENCES portfolios(id),
+    asset_id BIGINT NOT NULL REFERENCES assets(id),
+    reference_key VARCHAR(120) NOT NULL,
+    eligible_shares NUMERIC(19, 6) NOT NULL CHECK (eligible_shares > 0),
+    dividend_per_share NUMERIC(19, 4) NOT NULL CHECK (dividend_per_share > 0),
+    amount NUMERIC(19, 4) NOT NULL CHECK (amount > 0),
+    currency VARCHAR(3) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (portfolio_id, reference_key)
+);
+CREATE TABLE portfolio_risk_insights (
+    portfolio_id BIGINT NOT NULL REFERENCES portfolios(id),
+    insight_key VARCHAR(160) NOT NULL,
+    last_emitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (portfolio_id, insight_key)
+);
+
+===== V11__scheduled_dividends.sql =====
+CREATE TABLE simulated_dividend_schedules (
+    id BIGSERIAL PRIMARY KEY,
+    asset_id BIGINT NOT NULL REFERENCES assets(id),
+    reference_key VARCHAR(120) NOT NULL UNIQUE,
+    dividend_per_share NUMERIC(19,4) NOT NULL CHECK (dividend_per_share > 0),
+    currency VARCHAR(3) NOT NULL,
+    record_cutoff TIMESTAMPTZ NOT NULL,
+    payment_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (payment_at > record_cutoff)
+);
+
+CREATE TABLE simulated_scheduled_dividend_payments (
+    id BIGSERIAL PRIMARY KEY,
+    schedule_id BIGINT NOT NULL REFERENCES simulated_dividend_schedules(id),
+    portfolio_id BIGINT NOT NULL REFERENCES portfolios(id),
+    eligible_shares NUMERIC(19,6) NOT NULL CHECK (eligible_shares > 0),
+    amount NUMERIC(19,4) NOT NULL CHECK (amount > 0),
+    credited_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (schedule_id, portfolio_id)
+);
+CREATE INDEX idx_simulated_dividend_schedules_due ON simulated_dividend_schedules(payment_at);
+
+===== V12__market_price_alerts.sql =====
+CREATE TABLE market_price_alerts (
+ id BIGSERIAL PRIMARY KEY,
+ portfolio_id BIGINT NOT NULL REFERENCES portfolios(id),
+ symbol VARCHAR(20) NOT NULL,
+ currency VARCHAR(3) NOT NULL,
+ direction VARCHAR(5) NOT NULL CHECK (direction IN ('ABOVE','BELOW')),
+ target_price NUMERIC(19,4) NOT NULL CHECK (target_price > 0),
+ last_price NUMERIC(19,4) NOT NULL CHECK (last_price > 0),
+ status VARCHAR(12) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','TRIGGERED','CANCELLED')),
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ triggered_at TIMESTAMPTZ,
+ CHECK ((status = 'TRIGGERED') = (triggered_at IS NOT NULL))
+);
+CREATE INDEX idx_market_price_alerts_active ON market_price_alerts(status, symbol);
+CREATE INDEX idx_market_price_alerts_portfolio ON market_price_alerts(portfolio_id, created_at DESC);
+
+===== V13__watchlists_and_stock_universe.sql =====
+-- Milestone 28: fictional stock universe and persistent watchlists
+ALTER TABLE assets ADD COLUMN IF NOT EXISTS sector VARCHAR(60);
+INSERT INTO assets(symbol,name,price,currency,sector) VALUES ('NEXUS','Nexus Digital Systems',1245,'INR','Technology') ON CONFLICT (symbol) DO NOTHING;
+INSERT INTO assets(symbol,name,price,currency,sector) VALUES ('QUANT','Quantix Computing',2180,'INR','Technology') ON CONFLICT (symbol) DO NOTHING;
+INSERT INTO assets(symbol,name,price,currency,sector) VALUES ('CYBER','CyberPeak Security',875,'INR','Technology') ON CONFLICT (symbol) DO NOTHING;
+INSERT INTO assets(symbol,name,price,currency,sector) VALUES ('CLOUD','Cloudspire Technologies',1560,'INR','Technology') ON CONFLICT (symbol) DO NOTHING;
+INSERT INTO assets(symbol,name,price,currency,sector) VALUES ('FINIX','Finix Financial Services',640,'INR','Finance') ON CONFLICT (symbol) DO NOTHING;
+INSERT INTO assets(symbol,name,price,currency,sector) VALUES ('VAULT','Vaultstone Banking',1120,'INR','Finance') ON CONFLICT (symbol) DO NOTHING;
+INSERT INTO assets(symbol,name,price,currency,sector) VALUES ('CREDO','Credora Lending',425,'INR','Finance') ON CONFLICT (symbol) DO NOTHING;
+INSERT INTO assets(symbol,name,price,currency,sector) VALUES ('PAYGO','Paygo Digital Payments',310,'INR','Finance') ON CONFLICT (symbol) DO NOTHING;
+INSERT INTO assets(symbol,name,price,currency,sector) VALUES ('TRUST','Trustwell Capital',1780,'INR','Finance') ON CONFLICT (symbol) DO NOTHING;
+INSERT INTO assets(symbol,name,price,currency,sector) VALUES ('SOLAR','Solara Renewables',485,'INR','Energy') ON CONFLICT (symbol) DO NOTHING;
+INSERT INTO assets(symbol,name,price,currency,sector) VALUES ('VOLT','VoltEdge Energy',725,'INR','Energy') ON CONFLICT (symbol) DO NOTHING;
+INSERT INTO assets(symbol,name,price,currency,sector) VALUES ('HYDRO','HydroNova Power',365,'INR','Energy') ON CONFLICT (symbol) DO NOTHING;
+INSERT INTO assets(symbol,name,price,currency,sector) VALUES ('STEEL','SteelForge Industries',920,'INR','Industrial') ON CONFLICT (symbol) DO NOTHING;
+INSERT INTO assets(symbol,name,price,currency,sector) VALUES ('METRO','Metroline Infrastructure',580,'INR','Industrial') ON CONFLICT (symbol) DO NOTHING;
+INSERT INTO assets(symbol,name,price,currency,sector) VALUES ('MEDIX','Medix Healthcare',1340,'INR','Healthcare') ON CONFLICT (symbol) DO NOTHING;
+INSERT INTO assets(symbol,name,price,currency,sector) VALUES ('BIOVA','Biova Life Sciences',765,'INR','Healthcare') ON CONFLICT (symbol) DO NOTHING;
+INSERT INTO assets(symbol,name,price,currency,sector) VALUES ('CAREX','Carex Diagnostics',545,'INR','Healthcare') ON CONFLICT (symbol) DO NOTHING;
+INSERT INTO assets(symbol,name,price,currency,sector) VALUES ('FRESH','Freshfield Foods',295,'INR','Consumer') ON CONFLICT (symbol) DO NOTHING;
+INSERT INTO assets(symbol,name,price,currency,sector) VALUES ('URBAN','UrbanNest Retail',690,'INR','Consumer') ON CONFLICT (symbol) DO NOTHING;
+INSERT INTO assets(symbol,name,price,currency,sector) VALUES ('AURORA','Aurora Consumer Brands',1095,'INR','Consumer') ON CONFLICT (symbol) DO NOTHING;
+CREATE TABLE watchlists (
+ id BIGSERIAL PRIMARY KEY,
+ portfolio_id BIGINT NOT NULL REFERENCES portfolios(id) ON DELETE CASCADE,
+ name VARCHAR(80) NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ CONSTRAINT watchlists_name_nonblank CHECK (length(btrim(name)) > 0),
+ CONSTRAINT watchlists_unique_name UNIQUE (portfolio_id,name)
+);
+CREATE TABLE watchlist_items (
+ watchlist_id BIGINT NOT NULL REFERENCES watchlists(id) ON DELETE CASCADE,
+ asset_id BIGINT NOT NULL REFERENCES assets(id),
+ added_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ PRIMARY KEY (watchlist_id,asset_id)
+);
+CREATE INDEX watchlists_portfolio_idx ON watchlists(portfolio_id);
+
+===== V14__market_intelligence.sql =====
+-- Simulated market observations and durable, deduplicated intelligence events.
+CREATE TABLE market_price_samples (
+ id BIGSERIAL PRIMARY KEY, symbol VARCHAR(20) NOT NULL,
+ currency VARCHAR(3) NOT NULL, price NUMERIC(19,4) NOT NULL CHECK(price>0),
+ observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX market_price_samples_lookup ON market_price_samples(symbol, observed_at DESC);
+CREATE TABLE market_intelligence_events (
+ id BIGSERIAL PRIMARY KEY, symbol VARCHAR(20) NOT NULL,
+ currency VARCHAR(3) NOT NULL, event_type VARCHAR(30) NOT NULL,
+ window_seconds INTEGER NOT NULL, start_price NUMERIC(19,4) NOT NULL,
+ end_price NUMERIC(19,4) NOT NULL, change_percent NUMERIC(12,4) NOT NULL,
+ headline VARCHAR(220) NOT NULL, explanation TEXT NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX market_intelligence_events_latest ON market_intelligence_events(created_at DESC,id DESC);
+CREATE INDEX market_intelligence_events_cooldown ON market_intelligence_events(symbol,event_type,created_at DESC);
+CREATE TABLE market_intelligence_outbox (
+ event_id BIGSERIAL PRIMARY KEY,
+ intelligence_id BIGINT NOT NULL UNIQUE REFERENCES market_intelligence_events(id) ON DELETE CASCADE,
+ payload TEXT NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ published_at TIMESTAMPTZ
+);
+CREATE INDEX market_intelligence_outbox_pending ON market_intelligence_outbox(created_at,event_id) WHERE published_at IS NULL;
+
+===== V15__pre_trade_risk_policies.sql =====
+-- PortfolioLab simulated pre-trade policies. Defaults are intentionally permissive for existing demo balances.
+CREATE TABLE pre_trade_risk_policies (
+ portfolio_id BIGINT PRIMARY KEY REFERENCES portfolios(id) ON DELETE CASCADE,
+ max_order_value NUMERIC(19,4) NOT NULL DEFAULT 50000 CHECK (max_order_value > 0),
+ max_position_pct NUMERIC(5,2) NOT NULL DEFAULT 100 CHECK (max_position_pct > 0 AND max_position_pct <= 100),
+ enabled BOOLEAN NOT NULL DEFAULT TRUE,
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+INSERT INTO pre_trade_risk_policies(portfolio_id)
+ SELECT id FROM portfolios ON CONFLICT (portfolio_id) DO NOTHING;
+
+===== V2__seed_demo_assets.sql =====
+INSERT INTO assets (symbol, name, price, currency)
+VALUES
+    ('DEMO', 'Demo Industries', 125.5000, 'INR'),
+    ('NOVA', 'Nova Technologies', 842.7500, 'INR'),
+    ('GREEN', 'Green Energy Labs', 315.2500, 'INR'),
+    ('ORBIT', 'Orbit Financial Systems', 1560.0000, 'INR'),
+    ('ALPHA', 'Alpha Consumer Products', 98.4000, 'INR');
+
+===== V3__create_portfolio_tables.sql =====
+CREATE TABLE portfolios (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    cash_balance NUMERIC(19, 4) NOT NULL DEFAULT 0,
+    currency VARCHAR(3) NOT NULL DEFAULT 'INR',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT chk_portfolio_cash_nonnegative
+        CHECK (cash_balance >= 0),
+
+    CONSTRAINT chk_portfolio_currency
+        CHECK (currency ~ '^[A-Z]{3}$')
+);
+
+CREATE TABLE holdings (
+    id BIGSERIAL PRIMARY KEY,
+    portfolio_id BIGINT NOT NULL,
+    asset_id BIGINT NOT NULL,
+    quantity NUMERIC(19, 6) NOT NULL,
+    average_buy_price NUMERIC(19, 4) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_holdings_portfolio
+        FOREIGN KEY (portfolio_id)
+        REFERENCES portfolios(id),
+
+    CONSTRAINT fk_holdings_asset
+        FOREIGN KEY (asset_id)
+        REFERENCES assets(id),
+
+    CONSTRAINT uq_portfolio_asset
+        UNIQUE (portfolio_id, asset_id),
+
+    CONSTRAINT chk_holding_quantity
+        CHECK (quantity > 0),
+
+    CONSTRAINT chk_holding_average_price
+        CHECK (average_buy_price >= 0)
+);
+
+CREATE TABLE transactions (
+    id BIGSERIAL PRIMARY KEY,
+    portfolio_id BIGINT NOT NULL,
+    asset_id BIGINT NOT NULL,
+    transaction_type VARCHAR(4) NOT NULL,
+    quantity NUMERIC(19, 6) NOT NULL,
+    price_per_unit NUMERIC(19, 4) NOT NULL,
+    total_amount NUMERIC(19, 4) NOT NULL,
+    currency VARCHAR(3) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_transactions_portfolio
+        FOREIGN KEY (portfolio_id)
+        REFERENCES portfolios(id),
+
+    CONSTRAINT fk_transactions_asset
+        FOREIGN KEY (asset_id)
+        REFERENCES assets(id),
+
+    CONSTRAINT chk_transaction_type
+        CHECK (transaction_type IN ('BUY', 'SELL')),
+
+    CONSTRAINT chk_transaction_quantity
+        CHECK (quantity > 0),
+
+    CONSTRAINT chk_transaction_price
+        CHECK (price_per_unit > 0),
+
+    CONSTRAINT chk_transaction_total
+        CHECK (total_amount > 0),
+
+    CONSTRAINT chk_transaction_currency
+        CHECK (currency ~ '^[A-Z]{3}$')
+);
+
+CREATE INDEX idx_holdings_portfolio
+    ON holdings(portfolio_id);
+
+CREATE INDEX idx_transactions_portfolio_created
+    ON transactions(portfolio_id, created_at DESC);
+
+===== V4__seed_demo_portfolio.sql =====
+INSERT INTO portfolios (
+    name,
+    cash_balance,
+    currency
+)
+VALUES (
+    'Demo Portfolio',
+    100000.0000,
+    'INR'
+);
+
+===== V5__create_portfolio_snapshots.sql =====
+CREATE TABLE portfolio_snapshots (
+    id BIGSERIAL PRIMARY KEY,
+    portfolio_id BIGINT NOT NULL REFERENCES portfolios(id),
+    captured_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    cash_balance NUMERIC(19,4) NOT NULL,
+    holdings_value NUMERIC(19,4) NOT NULL,
+    total_value NUMERIC(19,4) NOT NULL,
+    currency VARCHAR(3) NOT NULL,
+    valuation_source VARCHAR(30) NOT NULL
+);
+
+CREATE INDEX idx_portfolio_snapshots_history
+    ON portfolio_snapshots(portfolio_id, captured_at DESC, id DESC);
+
+===== V6__create_fx_rates.sql =====
+CREATE TABLE fx_rates (
+    id BIGSERIAL PRIMARY KEY,
+    base_currency VARCHAR(3) NOT NULL,
+    quote_currency VARCHAR(3) NOT NULL,
+    rate NUMERIC(19, 8) NOT NULL,
+    source VARCHAR(30) NOT NULL,
+    captured_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT chk_fx_base_currency
+        CHECK (base_currency ~ '^[A-Z]{3}$'),
+
+    CONSTRAINT chk_fx_quote_currency
+        CHECK (quote_currency ~ '^[A-Z]{3}$'),
+
+    CONSTRAINT chk_fx_distinct_currencies
+        CHECK (base_currency <> quote_currency),
+
+    CONSTRAINT chk_fx_positive_rate
+        CHECK (rate > 0)
+);
+
+CREATE INDEX idx_fx_rates_pair_history
+    ON fx_rates (
+        base_currency,
+        quote_currency,
+        captured_at DESC,
+        id DESC
+    );
+
+INSERT INTO fx_rates (
+    base_currency,
+    quote_currency,
+    rate,
+    source
+)
+VALUES
+    ('USD', 'INR', 85.00000000, 'SIMULATED'),
+    ('EUR', 'INR', 92.00000000, 'SIMULATED');
+
+===== V7__add_transaction_fx_execution.sql =====
+ALTER TABLE transactions
+    ADD COLUMN execution_fx_rate NUMERIC(19, 8);
+
+ALTER TABLE transactions
+    ADD COLUMN portfolio_amount NUMERIC(19, 4);
+
+UPDATE transactions
+SET execution_fx_rate = 1,
+    portfolio_amount = total_amount;
+
+ALTER TABLE transactions
+    ALTER COLUMN execution_fx_rate SET NOT NULL,
+    ALTER COLUMN portfolio_amount SET NOT NULL;
+
+ALTER TABLE transactions
+    ADD CONSTRAINT chk_transaction_fx_rate_positive
+    CHECK (execution_fx_rate > 0);
+
+ALTER TABLE transactions
+    ADD CONSTRAINT chk_transaction_portfolio_amount_nonnegative
+    CHECK (portfolio_amount >= 0);
+
+===== V8__add_holding_historical_cost.sql =====
+ALTER TABLE holdings
+    ADD COLUMN historical_cost_portfolio NUMERIC(19,4);
+
+DO $$
+DECLARE
+    h RECORD;
+    t RECORD;
+    running_quantity NUMERIC;
+    running_cost NUMERIC;
+BEGIN
+    FOR h IN
+        SELECT id, portfolio_id, asset_id, quantity
+        FROM holdings
+        ORDER BY id
+    LOOP
+        running_quantity := 0;
+        running_cost := 0;
+
+        FOR t IN
+            SELECT transaction_type, quantity, portfolio_amount
+            FROM transactions
+            WHERE portfolio_id = h.portfolio_id
+              AND asset_id = h.asset_id
+            ORDER BY created_at ASC, id ASC
+        LOOP
+            IF t.transaction_type = 'BUY' THEN
+                running_quantity := running_quantity + t.quantity;
+                running_cost := running_cost + t.portfolio_amount;
+
+            ELSIF t.transaction_type = 'SELL' THEN
+                IF t.quantity > running_quantity THEN
+                    RAISE EXCEPTION
+                        'SELL exceeds position for holding %', h.id;
+                END IF;
+
+                IF t.quantity = running_quantity THEN
+                    running_quantity := 0;
+                    running_cost := 0;
+                ELSE
+                    running_cost := running_cost *
+                        (running_quantity - t.quantity) /
+                        running_quantity;
+
+                    running_quantity := running_quantity - t.quantity;
+                END IF;
+            ELSE
+                RAISE EXCEPTION
+                    'Unknown transaction type for holding %', h.id;
+            END IF;
+        END LOOP;
+
+        IF running_quantity <> h.quantity THEN
+            RAISE EXCEPTION
+                'History quantity mismatch for holding %', h.id;
+        END IF;
+
+        IF running_quantity <= 0 THEN
+            RAISE EXCEPTION
+                'Invalid remaining quantity for holding %', h.id;
+        END IF;
+
+        UPDATE holdings
+        SET historical_cost_portfolio = ROUND(running_cost, 4)
+        WHERE id = h.id;
+    END LOOP;
+END $$;
+
+ALTER TABLE holdings
+    ALTER COLUMN historical_cost_portfolio SET NOT NULL;
+
+ALTER TABLE holdings
+    ADD CONSTRAINT chk_holding_historical_cost_nonnegative
+    CHECK (historical_cost_portfolio >= 0);
+
+===== V9__create_notification_infrastructure.sql =====
+CREATE TABLE notification_outbox (
+    event_id UUID PRIMARY KEY,
+    event_type VARCHAR(80) NOT NULL,
+    portfolio_id BIGINT NOT NULL REFERENCES portfolios(id),
+    payload TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    published_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_notification_outbox_pending
+    ON notification_outbox (created_at, event_id)
+    WHERE published_at IS NULL;
+
+CREATE TABLE notifications (
+    id BIGSERIAL PRIMARY KEY,
+    event_id UUID NOT NULL UNIQUE,
+    portfolio_id BIGINT NOT NULL REFERENCES portfolios(id),
+    source VARCHAR(80) NOT NULL,
+    title VARCHAR(200) NOT NULL,
+    message TEXT NOT NULL,
+    target_url VARCHAR(300),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    read_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_notifications_portfolio_created
+    ON notifications (portfolio_id, created_at DESC, id DESC);
+

@@ -30,7 +30,7 @@ public class NotificationEventConsumer {
         JsonNode event = mapper.readTree(payload);
 
         String type = event.path("eventType").asText();
-        if ("AGENT_INSIGHT".equals(type) || "DIVIDEND_CREDITED".equals(type)) {
+        if ("AGENT_INSIGHT".equals(type) || "DIVIDEND_CREDITED".equals(type) || "PRICE_ALERT".equals(type)) {
             UUID id = UUID.fromString(event.path("eventId").asText());
             long portfolioId = event.path("portfolioId").asLong();
             String title = event.path("title").asText();
@@ -44,7 +44,7 @@ public class NotificationEventConsumer {
                         (event_id, portfolio_id, source, title, message, target_url)
                     VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT (event_id) DO NOTHING
-                    """, id, portfolioId, "AGENT_INSIGHT".equals(type) ? "AGENT" : "DIVIDEND",
+                    """, id, portfolioId, "AGENT_INSIGHT".equals(type) ? "AGENT" : "PRICE_ALERT".equals(type) ? "PRICE_ALERT" : "DIVIDEND",
                     title, message, targetUrl);
             return;
         }

@@ -1,0 +1,822 @@
+===== frontend\src\components\PortfolioChat.tsx =====
+
+"use client";
+
+import { useState, type FormEvent } from "react";
+
+type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+export default function PortfolioChat() {
+  const [open, setOpen] = useState(false);
+  const [message, setMessage] = useState("");
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  // Local demo portfolio. Replace with the selected
+  // authenticated portfolio when that functionality exists.
+  const portfolioId = 1;
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const question = message.trim();
+
+    if (!question || loading || question.length > 2000) return;
+
+    setMessages((previous) => [
+      ...previous,
+      { role: "user", content: question }
+    ]);
+    setMessage("");
+    setLoading(true);
+
+    try {
+      const response = await fetch("/api/ai/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ portfolioId, message: question })
+      });
+
+      if (!response.ok) {
+        throw new Error("AI request failed");
+      }
+
+      const data = await response.json();
+
+      if (typeof data.reply !== "string") {
+        throw new Error("Invalid AI response");
+      }
+
+      setMessages((previous) => [
+        ...previous,
+        { role: "assistant", content: data.reply }
+      ]);
+    } catch {
+      setMessages((previous) => [
+        ...previous,
+        {
+          role: "assistant",
+          content: "I couldn't connect to PortfolioLab AI. Please check that the local AI service and backend are running."
+        }
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="fixed bottom-5 right-5 z-50">
+      {open && (
+        <section
+          aria-label="PortfolioLab AI chat"
+          className="mb-4 flex h-[min(520px,75vh)] w-[min(380px,calc(100vw-40px))] flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl"
+        >
+          <div className="flex items-center justify-between border-b border-slate-800 px-4 py-4">
+            <div>
+              <h2 className="font-semibold text-white">
+                PortfolioLab AI
+              </h2>
+              <p className="text-xs text-slate-400">
+                Simulated portfolio assistant
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              aria-label="Close chat"
+              className="rounded-lg px-3 py-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+            >
+              ✕
+            </button>
+          </div>
+
+          <div
+            aria-live="polite"
+            className="flex-1 space-y-3 overflow-y-auto p-4"
+          >
+            {messages.length === 0 && (
+              <div className="rounded-xl bg-slate-800 p-3 text-sm text-slate-300">
+                Ask about your simulated holdings, portfolio values, or performance.
+              </div>
+            )}
+
+            {messages.map((item, index) => (
+              <div
+                key={index}
+                className={`max-w-[90%] whitespace-pre-wrap break-words rounded-xl p-3 text-sm ${
+                  item.role === "user"
+                    ? "ml-auto bg-emerald-800 text-emerald-50"
+                    : "mr-auto bg-slate-800 text-slate-200"
+                }`}
+              >
+                {item.content}
+              </div>
+            ))}
+
+            {loading && (
+              <p role="status" className="text-sm text-slate-400">
+                Thinking...
+              </p>
+            )}
+          </div>
+
+          <form
+            onSubmit={handleSubmit}
+            className="flex gap-2 border-t border-slate-800 p-3"
+          >
+            <input
+              type="text"
+              value={message}
+              onChange={(event) => setMessage(event.target.value)}
+              maxLength={2000}
+              placeholder="Ask about your portfolio..."
+              aria-label="Your message"
+              className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500"
+            />
+
+            <button
+              type="submit"
+              disabled={loading || !message.trim()}
+              className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Send
+            </button>
+          </form>
+
+          <p className="pb-2 text-center text-[10px] text-slate-500">
+            Educational simulation · Local AI
+          </p>
+        </section>
+      )}
+
+      <button
+        type="button"
+        onClick={() => setOpen((previous) => !previous)}
+        aria-label={open ? "Close AI assistant" : "Open AI assistant"}
+        aria-expanded={open}
+        className="ml-auto flex h-14 items-center gap-2 rounded-full bg-emerald-500 px-5 font-semibold text-slate-950 shadow-xl hover:bg-emerald-400"
+      >
+        <span aria-hidden="true">✦</span>
+        {open ? "Close" : "Ask AI"}
+      </button>
+    </div>
+  );
+}
+
+
+===== frontend\src\components\AppShell.tsx =====
+"use client";
+
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import NotificationBell from "./NotificationBell";
+import PortfolioChat from "./PortfolioChat";
+import "./portfolio-shell.css";
+
+type NavItem = { label: string; href: string; glyph: string; keywords?: string };
+type NavGroup = { title: string; items: NavItem[]; collapsible?: boolean };
+const groups: NavGroup[] = [
+  { title: "Workspace", items: [
+    { label: "Overview", href: "/", glyph: "▦", keywords: "dashboard home" },
+    { label: "Markets", href: "/markets", glyph: "↗", keywords: "stocks prices trading" },
+    { label: "Portfolio", href: "/portfolio", glyph: "◈", keywords: "holdings assets" },
+  ] },
+  { title: "Discover & monitor", items: [
+    { label: "Market Intelligence", href: "/intelligence", glyph: "✦", keywords: "signals market feed movements trends" },
+    { label: "Watchlists", href: "/watchlists", glyph: "☆", keywords: "favorites stocks" },
+    { label: "Price Alerts", href: "/alerts", glyph: "◎", keywords: "threshold notification" },
+  ] },
+  { title: "Insights & tools", collapsible: true, items: [
+    { label: "FX Analytics", href: "/fx", glyph: "⇄", keywords: "currency" },
+    { label: "AI Agents", href: "/agents", glyph: "✧", keywords: "risk intelligence" },
+    { label: "Activity", href: "/activity", glyph: "◷", keywords: "history transactions" },
+    { label: "Notifications", href: "/notifications", glyph: "♧", keywords: "messages inbox" },
+  ] },
+];
+const allItems = groups.flatMap((g) => g.items);
+
+export default function AppShell({ children }: { children: ReactNode }) {
+  const [theme, setTheme] = useState<"dark" | "light" | "system">("system");
+  useEffect(() => {
+    const saved = window.localStorage.getItem("portfoliolab-theme");
+    if (saved === "dark" || saved === "light" || saved === "system") setTheme(saved);
+  }, []);
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => { document.documentElement.dataset.plTheme = theme === "system" ? (media.matches ? "dark" : "light") : theme; };
+    apply();
+    media.addEventListener("change", apply);
+    window.localStorage.setItem("portfoliolab-theme", theme);
+    return () => media.removeEventListener("change", apply);
+  }, [theme]);
+  const pathname = usePathname();
+  const router = useRouter();
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState(0);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const current = allItems.find((item) => item.href === pathname) ?? allItems.find((item) => item.href !== "/" && pathname.startsWith(item.href + "/"));
+  const filtered = useMemo(() => allItems.filter((item) => `${item.label} ${item.keywords ?? ""}`.toLowerCase().includes(query.trim().toLowerCase())), [query]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setSearchOpen((v) => !v); }
+      if (e.key === "Escape") { setSearchOpen(false); setMobileOpen(false); }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+  useEffect(() => { if (searchOpen) { setQuery(""); setSelected(0); const t = window.setTimeout(() => searchRef.current?.focus(), 30); return () => window.clearTimeout(t); } }, [searchOpen]);
+  useEffect(() => { if (groups[2].items.some((item) => pathname === item.href)) setToolsOpen(true); }, [pathname]);
+  useEffect(() => { setMobileOpen(false); }, [pathname]);
+  function navigate(href: string) { setSearchOpen(false); setMobileOpen(false); router.push(href); }
+
+  return <div className="pl-shell">
+    {mobileOpen && <button className="pl-mobile-scrim" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
+    <aside className={`pl-sidebar ${mobileOpen ? "pl-sidebar-open" : ""}`} aria-label="Main navigation">
+      <Link href="/" className="pl-brand" onClick={() => setMobileOpen(false)}>
+        <span className="pl-brand-mark">P<span className="pl-brand-spark">✦</span></span>
+        <span className="pl-brand-copy"><strong>PortfolioLab</strong><small>MARKET SIMULATOR</small></span>
+      </Link>
+      <nav className="pl-nav">
+        {groups.map((group) => <section key={group.title} className="pl-nav-group">
+          {group.collapsible ? <button className="pl-nav-heading pl-nav-toggle" aria-expanded={toolsOpen} onClick={() => setToolsOpen((v) => !v)}>{group.title}<span>{toolsOpen ? "⌃" : "⌄"}</span></button> : <div className="pl-nav-heading">{group.title}</div>}
+          {(!group.collapsible || toolsOpen) && <div className="pl-nav-links">{group.items.map((item) => <Link key={item.href} href={item.href} onClick={() => setMobileOpen(false)} aria-current={pathname === item.href ? "page" : undefined} className={`pl-nav-link ${pathname === item.href ? "pl-nav-active" : ""}`}><span className="pl-nav-glyph" aria-hidden="true">{item.glyph}</span><span>{item.label}</span>{pathname === item.href && <span className="pl-nav-active-dot" />}</Link>)}</div>}
+        </section>)}
+      </nav>
+      <div className="pl-sidebar-bottom"><span className="pl-live-dot" /><span><strong>SIMULATION ACTIVE</strong><small>Fictional assets · No real trading</small></span></div>
+    </aside>
+    <div className="pl-workspace">
+      <header className="pl-header">
+        <div className="pl-header-left"><button className="pl-mobile-menu" aria-label="Open navigation" aria-expanded={mobileOpen} onClick={() => setMobileOpen((v) => !v)}>☰</button><div className="pl-page-heading"><div className="pl-eyebrow">PORTFOLIOLAB <span>/</span> SIMULATOR</div><h1>{current?.label ?? "PortfolioLab"}</h1></div></div>
+        <div className="pl-header-right"><button className="pl-header-search" onClick={() => setSearchOpen(true)} aria-label="Open command search"><span>⌕</span><span className="pl-header-search-label">Quick search</span><kbd>Ctrl K</kbd></button><div className="pl-theme-switch" role="group" aria-label="Color theme">
+          {(["light", "dark", "system"] as const).map((mode) => <button key={mode} type="button" title={mode === "system" ? "Auto: follows your Windows/browser appearance" : `${mode[0].toUpperCase()}${mode.slice(1)} appearance`} aria-label={mode === "system" ? "Auto theme (follows system settings)" : `${mode} theme`} aria-pressed={theme === mode} className={theme === mode ? "pl-theme-active" : ""} onClick={() => setTheme(mode)}>{mode === "light" ? "☀" : mode === "dark" ? "☾" : "Auto"}</button>)}
+        </div><span className="pl-header-divider" /><NotificationBell /><span className="pl-mode-pill"><span className="pl-live-dot" /> Simulation</span></div>
+      </header>
+      <main className="pl-main" id="main-content">{children}</main>
+    </div>
+    <PortfolioChat />
+    {searchOpen && <div className="pl-command-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setSearchOpen(false); }}><div className="pl-command" role="dialog" aria-modal="true" aria-label="Search workspace"><div className="pl-command-input-row"><span>⌕</span><input ref={searchRef} value={query} onChange={(e) => { setQuery(e.target.value); setSelected(0); }} onKeyDown={(e) => { if (e.key === "ArrowDown") { e.preventDefault(); setSelected((n) => Math.min(n + 1, filtered.length - 1)); } else if (e.key === "ArrowUp") { e.preventDefault(); setSelected((n) => Math.max(n - 1, 0)); } else if (e.key === "Enter" && filtered[selected]) navigate(filtered[selected].href); }} placeholder="Search pages, tools, or workflows…" aria-label="Search pages" /><button onClick={() => setSearchOpen(false)}>ESC</button></div><div className="pl-command-results">{filtered.length ? filtered.map((item, index) => <button key={item.href} className={`pl-command-result ${index === selected ? "pl-command-selected" : ""}`} onMouseEnter={() => setSelected(index)} onClick={() => navigate(item.href)}><span className="pl-command-glyph">{item.glyph}</span><span>{item.label}</span><span className="pl-command-arrow">↗</span></button>) : <p className="pl-command-empty">No matching pages. Try “Markets”, “Alerts”, or “Portfolio”.</p>}</div><div className="pl-command-footer">↑ ↓ Navigate <span>↵ Open</span> <span>ESC Close</span></div></div></div>}
+  </div>;
+}
+
+
+===== backend\src\main\java\com\portfoliolab\backend\oms\SimulatedOrderController.java =====
+package com.portfoliolab.backend.oms;
+
+import com.portfoliolab.backend.portfolio.OrderRequest;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.*;
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/portfolios/{portfolioId}/simulated-orders")
+public class SimulatedOrderController {
+ private final SimulatedOrderService service;
+ public SimulatedOrderController(SimulatedOrderService service){this.service=service;}
+ @PostMapping @ResponseStatus(HttpStatus.CREATED)
+ public SimulatedOrderService.OrderView submit(@PathVariable long portfolioId,@RequestBody OrderRequest request){return service.submit(portfolioId,request);}
+ @GetMapping public List<SimulatedOrderService.OrderView> list(@PathVariable long portfolioId){return service.list(portfolioId);}
+ @GetMapping("/{orderId}") public SimulatedOrderService.OrderView get(@PathVariable long portfolioId,@PathVariable long orderId){return service.get(portfolioId,orderId);}
+ @PostMapping("/{orderId}/cancel") public SimulatedOrderService.OrderView cancel(@PathVariable long portfolioId,@PathVariable long orderId){return service.cancel(portfolioId,orderId);}
+}
+
+
+===== backend\src\main\java\com\portfoliolab\backend\oms\SimulatedOrderService.java =====
+package com.portfoliolab.backend.oms;
+
+import com.portfoliolab.backend.portfolio.OrderRequest;
+import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Locale;
+
+@Service
+public class SimulatedOrderService {
+ private final JdbcTemplate jdbc;
+ public SimulatedOrderService(JdbcTemplate jdbc) { this.jdbc=jdbc; }
+ public record OrderView(long id,long portfolioId,long assetId,String side,BigDecimal requestedQuantity,
+                         BigDecimal filledQuantity,String status,String failureReason) {}
+ private final org.springframework.jdbc.core.RowMapper<OrderView> row=(rs,n)->new OrderView(
+  rs.getLong("id"),rs.getLong("portfolio_id"),rs.getLong("asset_id"),rs.getString("side"),
+  rs.getBigDecimal("requested_quantity"),rs.getBigDecimal("filled_quantity"),
+  rs.getString("status"),rs.getString("failure_reason"));
+ @Transactional
+ public OrderView submit(long portfolioId, OrderRequest request) {
+  if(request==null || request.assetId()==null || request.type()==null || request.quantity()==null)
+   throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Asset, side and quantity required");
+  String side=request.type().trim().toUpperCase(Locale.ROOT);
+  BigDecimal qty=request.quantity();
+  if(!List.of("BUY","SELL").contains(side) || qty.signum()<=0 || qty.stripTrailingZeros().scale()>0 || qty.precision()>13)
+   throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Invalid side or quantity");
+  Integer p=jdbc.queryForObject("SELECT count(*) FROM portfolios WHERE id=?",Integer.class,portfolioId);
+  Integer a=jdbc.queryForObject("SELECT count(*) FROM assets WHERE id=?",Integer.class,request.assetId());
+  if(p==null||p==0||a==null||a==0) throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Portfolio or asset not found");
+  Long id=jdbc.queryForObject("INSERT INTO simulated_orders(portfolio_id,asset_id,side,requested_quantity) VALUES(?,?,?,?) RETURNING id",
+   Long.class,portfolioId,request.assetId(),side,qty);
+  return get(portfolioId,id);
+ }
+ public OrderView get(long portfolioId,long orderId){
+  return jdbc.query("SELECT * FROM simulated_orders WHERE id=? AND portfolio_id=?",row,orderId,portfolioId)
+   .stream().findFirst().orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND,"Order not found"));
+ }
+ public List<OrderView> list(long portfolioId){
+  return jdbc.query("SELECT * FROM simulated_orders WHERE portfolio_id=? ORDER BY id DESC LIMIT 100",row,portfolioId);
+ }
+ @Transactional
+ public OrderView cancel(long portfolioId,long orderId){
+  List<OrderView> locked=jdbc.query("SELECT * FROM simulated_orders WHERE id=? AND portfolio_id=? FOR UPDATE",row,orderId,portfolioId);
+  if(locked.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Order not found");
+  OrderView current=locked.get(0);
+  if(!List.of("SUBMITTED","ACCEPTED","PARTIALLY_FILLED").contains(current.status()))
+   throw new ResponseStatusException(HttpStatus.CONFLICT,"Order is already terminal");
+  jdbc.update("UPDATE simulated_orders SET status='CANCELLED',updated_at=NOW() WHERE id=?",orderId);
+  return get(portfolioId,orderId);
+ }
+
+}
+
+
+===== backend\src\main\java\com\portfoliolab\backend\oms\ReconciliationService.java =====
+package com.portfoliolab.backend.oms;
+
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+import java.util.List;
+
+@Service
+class ReconciliationService {
+    private final JdbcTemplate jdbc;
+    ReconciliationService(JdbcTemplate jdbc) { this.jdbc = jdbc; }
+
+    record ExceptionItem(long orderId, String code, String details) {}
+    record Report(long portfolioId, int checkedOrders, int exceptionCount, List<ExceptionItem> exceptions,
+                  String scope) {}
+
+    Report reconcile(long portfolioId) {
+        Integer exists = jdbc.queryForObject("SELECT count(*) FROM portfolios WHERE id=?", Integer.class, portfolioId);
+        if (exists == null || exists == 0) throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.NOT_FOUND, "Portfolio not found");
+        Integer count = jdbc.queryForObject("SELECT count(*) FROM simulated_orders WHERE portfolio_id=?", Integer.class, portfolioId);
+        List<ExceptionItem> issues = jdbc.query("""
+            WITH receipts AS (
+              SELECT order_id, COUNT(*) AS receipt_count, COALESCE(SUM(quantity),0) AS receipt_qty
+              FROM simulated_exchange_executions GROUP BY order_id
+            ), fills AS (
+              SELECT order_id, COUNT(*) AS fill_count, COALESCE(SUM(quantity),0) AS fill_qty
+              FROM simulated_order_fills GROUP BY order_id
+            ), linked AS (
+              SELECT e.order_id,
+                     COUNT(*) FILTER (WHERE t.id IS NULL OR f.id IS NULL) AS missing_links,
+                     COUNT(*) FILTER (WHERE t.id IS NOT NULL AND (
+                         t.portfolio_id <> o.portfolio_id OR t.asset_id <> o.asset_id OR
+                         t.transaction_type <> o.side OR t.quantity <> e.quantity OR
+                         t.price_per_unit <> e.price_per_unit OR f.quantity <> e.quantity OR
+                         f.order_id <> e.order_id OR f.fill_sequence <> e.fill_sequence OR
+                         f.transaction_id <> e.transaction_id
+                     )) AS mismatched_trades
+              FROM simulated_exchange_executions e
+              JOIN simulated_orders o ON o.id=e.order_id
+              LEFT JOIN transactions t ON t.id=e.transaction_id
+              LEFT JOIN simulated_order_fills f ON f.transaction_id=e.transaction_id
+              GROUP BY e.order_id
+            )
+            SELECT o.id,
+              CASE
+                WHEN COALESCE(l.missing_links,0)>0 THEN 'MISSING_SETTLEMENT_LINK'
+                WHEN COALESCE(l.mismatched_trades,0)>0 THEN 'EXECUTION_TRANSACTION_MISMATCH'
+                WHEN COALESCE(r.receipt_count,0)<>COALESCE(f.fill_count,0) THEN 'RECEIPT_FILL_COUNT_MISMATCH'
+                WHEN COALESCE(r.receipt_qty,0)<>COALESCE(f.fill_qty,0) THEN 'RECEIPT_FILL_QUANTITY_MISMATCH'
+                WHEN o.filled_quantity<>COALESCE(r.receipt_qty,0) THEN 'ORDER_FILLED_QUANTITY_MISMATCH'
+                WHEN o.status='FILLED' AND o.filled_quantity<>o.requested_quantity THEN 'INVALID_FILLED_STATUS'
+                WHEN o.status='PARTIALLY_FILLED' AND (o.filled_quantity<=0 OR o.filled_quantity>=o.requested_quantity) THEN 'INVALID_PARTIAL_STATUS'
+                WHEN o.status IN ('SUBMITTED','ACCEPTED','REJECTED') AND o.filled_quantity<>0 THEN 'INVALID_UNFILLED_STATUS'
+                WHEN o.status='CANCELLED' AND o.filled_quantity>o.requested_quantity THEN 'INVALID_CANCELLED_STATUS'
+                ELSE NULL END AS code
+            FROM simulated_orders o
+            LEFT JOIN receipts r ON r.order_id=o.id
+            LEFT JOIN fills f ON f.order_id=o.id
+            LEFT JOIN linked l ON l.order_id=o.id
+            WHERE o.portfolio_id=?
+            ORDER BY o.id
+            """, (rs,n)->new ExceptionItem(rs.getLong("id"),rs.getString("code"),
+                    "Inconsistent simulated order, execution receipt, or settled trade"), portfolioId)
+                .stream().filter(e -> e.code()!=null).toList();
+        return new Report(portfolioId, count == null ? 0 : count, issues.size(), issues,
+                "Internal consistency only; receipts and settlements originate in the same Spring Boot worker");
+    }
+}
+
+@RestController
+@RequestMapping("/api/portfolios/{portfolioId}/reconciliation")
+class ReconciliationController {
+    private final ReconciliationService service;
+    ReconciliationController(ReconciliationService service) { this.service=service; }
+    @GetMapping
+    ReconciliationService.Report report(@PathVariable long portfolioId) {
+        return service.reconcile(portfolioId);
+    }
+}
+
+
+===== frontend\src\app\api\ai\agents\bonus\simulate\route.ts =====
+import { NextRequest, NextResponse } from "next/server";
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+
+    const { existingShares, bonusShares, requiredShares } = body ?? {};
+
+    if (
+      !Number.isSafeInteger(existingShares) ||
+      !Number.isSafeInteger(bonusShares) ||
+      !Number.isSafeInteger(requiredShares) ||
+      existingShares < 0 ||
+      bonusShares <= 0 ||
+      requiredShares <= 0
+    ) {
+      return NextResponse.json(
+        { error: "Enter valid whole-number share quantities and a positive bonus ratio." },
+        { status: 400 }
+      );
+    }
+
+    const response = await fetch(
+      "http://127.0.0.1:3101/api/agents/bonus/simulate",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          existingShares,
+          bonusShares,
+          requiredShares
+        }),
+        cache: "no-store",
+        signal: AbortSignal.timeout(15000)
+      }
+    );
+
+    const data = await response.json();
+
+    return NextResponse.json(data, {
+      status: response.status
+    });
+  } catch {
+    return NextResponse.json(
+      { error: "Bonus simulation is unavailable. Check that the AI service and backend are running." },
+      { status: 502 }
+    );
+  }
+}
+
+===== frontend\src\app\api\ai\agents\business-rules\evaluate\route.ts =====
+import { NextRequest, NextResponse } from "next/server";
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+
+    const response = await fetch(
+      "http://127.0.0.1:3101/api/agents/business-rules/evaluate",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        cache: "no-store",
+        signal: AbortSignal.timeout(15000)
+      }
+    );
+
+    const result = await response.json();
+
+    return NextResponse.json(result, {
+      status: response.status
+    });
+  } catch {
+    return NextResponse.json(
+      { error: "Business Rules AI service is unavailable." },
+      { status: 502 }
+    );
+  }
+}
+
+===== frontend\src\app\api\ai\agents\dividend\simulate\route.ts =====
+import { NextRequest, NextResponse } from "next/server";
+
+const AI_SERVICE_URL = "http://127.0.0.1:3101";
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+
+    if (
+      !body ||
+      typeof body !== "object" ||
+      Array.isArray(body) ||
+      !Number.isSafeInteger(body.eligibleShares) ||
+      body.eligibleShares < 0 ||
+      typeof body.dividendPerShare !== "number" ||
+      !Number.isFinite(body.dividendPerShare) ||
+      body.dividendPerShare < 0 ||
+      !["INR", "USD", "EUR"].includes(body.currency)
+    ) {
+      return NextResponse.json(
+        { error: "Invalid dividend simulation inputs" },
+        { status: 400 }
+      );
+    }
+
+    const response = await fetch(
+      `${AI_SERVICE_URL}/api/agents/dividend/simulate`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          eligibleShares: body.eligibleShares,
+          dividendPerShare: body.dividendPerShare,
+          currency: body.currency
+        }),
+        signal: AbortSignal.timeout(15000),
+        cache: "no-store"
+      }
+    );
+
+    if (!response.ok) {
+      return NextResponse.json(
+        { error: "Dividend simulation service failed" },
+        { status: 502 }
+      );
+    }
+
+    const data = await response.json();
+
+    if (
+      data?.agent !== "dividend" ||
+      data?.mode !== "read-only" ||
+      !data?.simulation ||
+      typeof data.simulation.grossDividend !== "number"
+    ) {
+      throw new Error("Unexpected dividend simulation response");
+    }
+
+    return NextResponse.json(data);
+  } catch (error) {
+    console.error("Dividend proxy error:", error);
+
+    return NextResponse.json(
+      { error: "Unable to connect to the Dividend Agent" },
+      { status: 502 }
+    );
+  }
+}
+
+===== frontend\src\app\api\ai\chat\route.ts =====
+
+import { NextRequest, NextResponse } from "next/server";
+
+const AI_SERVICE_URL = "http://127.0.0.1:3101";
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+
+    if (
+      typeof body?.message !== "string" ||
+      !body.message.trim() ||
+      body.message.length > 2000 ||
+      !Number.isSafeInteger(body.portfolioId) ||
+      body.portfolioId <= 0
+    ) {
+      return NextResponse.json(
+        { error: "Invalid chat request" },
+        { status: 400 }
+      );
+    }
+
+    const response = await fetch(
+      `${AI_SERVICE_URL}/api/portfolio/chat`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          portfolioId: body.portfolioId,
+          message: body.message
+        }),
+        signal: AbortSignal.timeout(120000),
+        cache: "no-store"
+      }
+    );
+
+    if (!response.ok) {
+      console.error(
+        "PortfolioLab AI returned HTTP",
+        response.status
+      );
+
+      return NextResponse.json(
+        { error: "PortfolioLab AI request failed" },
+        { status: 502 }
+      );
+    }
+
+    const data = await response.json();
+
+    return NextResponse.json({
+      reply: data.reply,
+      model: data.model,
+      holdingsCount: data.holdingsCount
+    });
+  } catch (error) {
+    console.error("AI proxy error:", error);
+
+    return NextResponse.json(
+      { error: "Unable to connect to PortfolioLab AI" },
+      { status: 502 }
+    );
+  }
+}
+
+
+===== frontend\src\app\api\portfolio\orders\route.ts =====
+import { NextRequest, NextResponse } from "next/server";
+
+const backend = process.env.BACKEND_URL ?? "http://localhost:8080";
+
+export async function POST(request: NextRequest) {
+  let body: unknown;
+
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json(
+      { error: "Invalid JSON request" },
+      { status: 400 }
+    );
+  }
+
+  if (
+    typeof body !== "object" ||
+    body === null ||
+    !("assetId" in body) ||
+    !("type" in body) ||
+    !("quantity" in body)
+  ) {
+    return NextResponse.json(
+      { error: "Missing order fields" },
+      { status: 400 }
+    );
+  }
+
+  const { assetId, type, quantity } = body;
+
+  if (
+    !Number.isSafeInteger(assetId) ||
+    typeof assetId !== "number" ||
+    assetId <= 0 ||
+    (type !== "BUY" && type !== "SELL") ||
+    typeof quantity !== "number" ||
+    !Number.isSafeInteger(quantity) ||
+    quantity <= 0
+  ) {
+    return NextResponse.json(
+      { error: "Invalid asset, order type, or quantity" },
+      { status: 400 }
+    );
+  }
+
+  try {
+    const response = await fetch(
+      `${backend}/api/portfolios/1/orders`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assetId, type, quantity }),
+        cache: "no-store",
+        signal: AbortSignal.timeout(10000),
+      }
+    );
+
+    const result = await response.text();
+
+    return new NextResponse(result, {
+      status: response.status,
+      headers: {
+        "Content-Type":
+          response.headers.get("content-type") ??
+          "application/json",
+        "Cache-Control": "no-store",
+      },
+    });
+  } catch {
+    return NextResponse.json(
+      {
+        error: "Trading backend unavailable. Check transaction history before retrying.",
+      },
+      { status: 503 }
+    );
+  }
+}
+
+===== frontend\src\app\api\portfolio\orders\preview\route.ts =====
+import { NextRequest, NextResponse } from "next/server";
+
+const backend = process.env.BACKEND_URL ?? "http://localhost:8080";
+
+export async function POST(request: NextRequest) {
+  let body: unknown;
+
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json(
+      { error: "Invalid JSON request" },
+      { status: 400 }
+    );
+  }
+
+  if (
+    typeof body !== "object" ||
+    body === null ||
+    !("assetId" in body) ||
+    !("type" in body) ||
+    !("quantity" in body)
+  ) {
+    return NextResponse.json(
+      { error: "Missing order fields" },
+      { status: 400 }
+    );
+  }
+
+  const { assetId, type, quantity } = body;
+
+  if (
+    typeof assetId !== "number" ||
+    !Number.isSafeInteger(assetId) ||
+    assetId <= 0 ||
+    (type !== "BUY" && type !== "SELL") ||
+    typeof quantity !== "number" ||
+    !Number.isSafeInteger(quantity) ||
+    quantity <= 0
+  ) {
+    return NextResponse.json(
+      { error: "Invalid asset, order type, or quantity" },
+      { status: 400 }
+    );
+  }
+
+  try {
+    const response = await fetch(
+      `${backend}/api/portfolios/1/orders/preview`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assetId, type, quantity }),
+        cache: "no-store",
+        signal: AbortSignal.timeout(15000),
+      }
+    );
+
+    const result = await response.text();
+
+    return new NextResponse(result, {
+      status: response.status,
+      headers: {
+        "Content-Type":
+          response.headers.get("content-type") ??
+          "application/json",
+        "Cache-Control": "no-store",
+      },
+    });
+  } catch {
+    return NextResponse.json(
+      {
+        error: "Order preview unavailable. No trade was executed.",
+      },
+      { status: 503 }
+    );
+  }
+}
+
+

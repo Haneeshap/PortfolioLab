@@ -94,7 +94,7 @@ class OrderServicePartialSaleTest {
                 portfolios,
                 assets,
                 holdings,
-                transactions, new OrderPricingService(market, fx), org.mockito.Mockito.mock(NotificationOutbox.class), org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
+                transactions, new OrderPricingService(market, fx), org.mockito.Mockito.mock(com.portfoliolab.backend.risk.PreTradeRiskService.class), org.mockito.Mockito.mock(NotificationOutbox.class), org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
 
         OrderResponse response = service.placeOrder(
                 1L,
