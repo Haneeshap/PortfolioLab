@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_DB: portfoliolab
       POSTGRES_USER: portfoliolab
-      POSTGRES_PASSWORD: PortfolioLabDev2026
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in the root .env file}
     ports:
       - "127.0.0.1:5432:5432"
     volumes:

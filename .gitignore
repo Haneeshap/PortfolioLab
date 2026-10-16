@@ -34,3 +34,13 @@ backups/
 # Local secrets
 .env.*
 !.env.example
+
+# Local exports, audit captures and generated tooling state
+database-backups/
+*-backup-*/
+*-backups-*/
+*.sql.gz
+*.dump
+*.tsbuildinfo
+*-audit.txt
+*-audit.zip
