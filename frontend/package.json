@@ -10,7 +10,8 @@
     "test:m34": "node --import ./tests/register-typescript.mjs --test tests/m34.test.mjs",
     "test:m35-m37": "node --import ./tests/register-typescript.mjs --test tests/m35-m37.test.mjs",
     "test:m38-m40": "node --import ./tests/register-typescript.mjs --test tests/m38-m40.test.mjs",
-    "test:m41-m43": "node --import ./tests/register-typescript.mjs --test tests/m41-m43.test.mjs"
+    "test:m41-m43": "node --import ./tests/register-typescript.mjs --test tests/m41-m43.test.mjs",
+    "test:m44-m46": "node --import ./tests/register-typescript.mjs --test tests/m44-m46.test.mjs"
   },
   "dependencies": {
     "next": "16.4.0",

@@ -5,6 +5,7 @@ PortfolioLab is a local educational portfolio and simulated trading system. A Ne
 ## Features and architecture
 
 - Portfolio cash, holdings, allocation, valuation, performance history and transactions.
+- Recorded portfolio performance, weighted-average P&L attribution and a read-only rebalancing planner on `/portfolio`; coverage and accounting limits are documented in [M44–M46](docs/M44-M46.md).
 - Simulated buy/sell previews, pre-trade risk checks, MARKET/LIMIT orders with DAY/GTC expiration, cash/share reservations, SSE lifecycle updates, execution receipts and reconciliation.
 - Live simulated prices, watchlists, price alerts, market intelligence and persistent notifications.
 - Fictional daily OHLCV research, technical indicators, isolated replay, read-only Portfolio Risk Lab and grounded Ask AI research tools.

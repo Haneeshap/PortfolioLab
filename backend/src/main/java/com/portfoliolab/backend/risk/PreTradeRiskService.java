@@ -22,6 +22,21 @@ public class PreTradeRiskService {
 
     public Decision evaluate(Portfolio portfolio, Asset asset, String side,
                              BigDecimal quantity, BigDecimal portfolioAmount) {
+        BigDecimal totalInvested = BigDecimal.ZERO, currentPosition = BigDecimal.ZERO;
+        if ("BUY".equals(side)) {
+            totalInvested = jdbc.queryForObject(
+                "SELECT COALESCE(SUM(historical_cost_portfolio),0) FROM holdings WHERE portfolio_id=?",
+                BigDecimal.class, portfolio.getId());
+            currentPosition = jdbc.queryForObject(
+                "SELECT COALESCE(SUM(historical_cost_portfolio),0) FROM holdings WHERE portfolio_id=? AND asset_id=?",
+                BigDecimal.class, portfolio.getId(), asset.getId());
+        }
+        return evaluateAgainstCosts(portfolio, asset, side, quantity, portfolioAmount, totalInvested, currentPosition);
+    }
+
+    /** Same policy engine for read-only sequential planning; inputs are server-derived portfolio costs. */
+    public Decision evaluateAgainstCosts(Portfolio portfolio, Asset asset, String side,
+            BigDecimal quantity, BigDecimal portfolioAmount, BigDecimal totalInvested, BigDecimal currentPosition) {
         if (!"BUY".equals(side) && !"SELL".equals(side))
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported order side");
         if (quantity == null || quantity.signum() <= 0 || portfolioAmount == null || portfolioAmount.signum() <= 0)
@@ -40,12 +55,6 @@ public class PreTradeRiskService {
             "Order value " + portfolioAmount + " " + portfolio.getCurrency() + "; maximum " + policy.maxOrderValue()));
         if ("BUY".equals(side)) {
             // Cost basis is stored in portfolio currency; do not sum raw multi-currency prices.
-            BigDecimal totalInvested = jdbc.queryForObject(
-                "SELECT COALESCE(SUM(historical_cost_portfolio),0) FROM holdings WHERE portfolio_id=?",
-                BigDecimal.class, portfolio.getId());
-            BigDecimal currentPosition = jdbc.queryForObject(
-                "SELECT COALESCE(SUM(historical_cost_portfolio),0) FROM holdings WHERE portfolio_id=? AND asset_id=?",
-                BigDecimal.class, portfolio.getId(), asset.getId());
             BigDecimal afterInvested = totalInvested.add(portfolioAmount);
             BigDecimal afterPosition = currentPosition.add(portfolioAmount);
             // The policy is a concentration-of-invested-cost limit, not an equity-market-value limit.
