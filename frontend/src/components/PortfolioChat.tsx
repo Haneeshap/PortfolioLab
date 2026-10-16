@@ -1,6 +1,8 @@
 
 "use client";
 
+import {getResearchContext,subscribeResearchContext} from "@/lib/research";
+import {useSyncExternalStore} from "react";
 import { useState, type FormEvent } from "react";
 
 type ChatMessage = {
@@ -9,6 +11,8 @@ type ChatMessage = {
 };
 
 export default function PortfolioChat() {
+  const researchContext=useSyncExternalStore(subscribeResearchContext,getResearchContext,()=>null);
+  const [useContext,setUseContext]=useState(true);
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -38,7 +42,7 @@ export default function PortfolioChat() {
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ portfolioId, message: question })
+        body: JSON.stringify({ portfolioId, message: question, ...(useContext&&researchContext?{researchContext}:{}) })
       });
 
       if (!response.ok) {
@@ -125,6 +129,7 @@ export default function PortfolioChat() {
             )}
           </div>
 
+          {researchContext&&<label className="px-4 py-2 text-xs text-slate-300"><input type="checkbox" checked={useContext} onChange={e=>setUseContext(e.target.checked)}/> Use current {researchContext.assetId?`fictional asset #${researchContext.assetId}, ${researchContext.from} to ${researchContext.to}`:"hypothetical scenario"} context</label>}
           <form
             onSubmit={handleSubmit}
             className="flex gap-2 border-t border-slate-800 p-3"

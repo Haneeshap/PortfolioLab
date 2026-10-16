@@ -208,6 +208,7 @@ export default function AssetCatalog({
                     >
                       Trade asset
                     </Link>
+                    <Link href={`/research?assetId=${asset.id}`} className="ml-3 text-emerald-400 underline">Research</Link>
                   </td>
                 </tr>
               );

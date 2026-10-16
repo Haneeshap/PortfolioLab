@@ -16,11 +16,13 @@ const groups: NavGroup[] = [
     { label: "Portfolio", href: "/portfolio", glyph: "◈", keywords: "holdings assets" },
   ] },
   { title: "Discover & monitor", items: [
+    { label: "Research Terminal", href: "/research", glyph: "R", keywords: "history candles replay indicators" },
     { label: "Market Intelligence", href: "/intelligence", glyph: "✦", keywords: "signals market feed movements trends" },
     { label: "Watchlists", href: "/watchlists", glyph: "☆", keywords: "favorites stocks" },
     { label: "Price Alerts", href: "/alerts", glyph: "◎", keywords: "threshold notification" },
   ] },
   { title: "Insights & tools", collapsible: true, items: [
+    { label: "Portfolio Risk Lab", href: "/portfolio/risk", glyph: "L", keywords: "scenario exposure what if" },
     { label: "FX Analytics", href: "/fx", glyph: "⇄", keywords: "currency" },
     { label: "AI Agents", href: "/agents", glyph: "✧", keywords: "risk intelligence" },
     { label: "Activity", href: "/activity", glyph: "◷", keywords: "history transactions" },

@@ -12,6 +12,7 @@ import (
 func main() {
 	simulator := NewMarketSimulator()
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /history", historyHandler)
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

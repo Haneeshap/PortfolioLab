@@ -7,6 +7,7 @@ PortfolioLab is a local educational portfolio and simulated trading system. A Ne
 - Portfolio cash, holdings, allocation, valuation, performance history and transactions.
 - Simulated buy/sell previews, pre-trade risk checks, MARKET/LIMIT orders with DAY/GTC expiration, cash/share reservations, SSE lifecycle updates, execution receipts and reconciliation.
 - Live simulated prices, watchlists, price alerts, market intelligence and persistent notifications.
+- Fictional daily OHLCV research, technical indicators, isolated replay, read-only Portfolio Risk Lab and grounded Ask AI research tools.
 - Dividend/bonus calculations, dividend scheduling, business rules and FX conversion/attribution.
 - Ask AI educational explanations, holdings analysis and read-only order/reconciliation evidence.
 
@@ -28,7 +29,7 @@ Spring outbox --> Kafka :9092 --> notification consumer --> PostgreSQL --> UI po
 | `compose.yaml` | PostgreSQL 17, Apache Kafka 3.9.1, named volumes and loopback host ports |
 | sibling `portfoliolab-ai/` | Node/TypeScript, tsx, MCP client/server SDK 2.3.1 range, Zod; Ollama qwen2.5:0.5b |
 
-Flyway automatically applies migrations V1–V20 under `backend/src/main/resources/db/migration`. They seed assets and INR Demo Portfolio (ID 1, initial cash 100000), then add history, FX, outbox/notifications, events, alerts, watchlists, intelligence, risk policies and simulated orders/executions. A fresh database has no traded holdings or execution receipts. Hibernate validates the schema; no database dump or manual table creation is needed.
+Flyway automatically applies migrations V1–V21 under `backend/src/main/resources/db/migration`. They seed assets and INR Demo Portfolio (ID 1, initial cash 100000), then add history, FX, outbox/notifications, events, alerts, watchlists, intelligence, risk policies and simulated orders/executions. A fresh database has no traded holdings or execution receipts. Hibernate validates the schema; no database dump or manual table creation is needed.
 
 Some Java files sit in unusually deep repeated source paths. Maven still compiles below its source root; search by class name when navigating. Backups are not application components.
 
@@ -262,3 +263,5 @@ For professional discussion, describe why the services exist, what survives rest
 This is a single-user local demo, not a production brokerage, secure multi-user service, real exchange feed or financial advice. Balances and markets are simulated. The model can invent incorrect explanations: compare answers with API evidence. AI tools expose read-only evidence/calculations, not trading authority.
 
 Docker host ports, Go and AI are configured for loopback; Spring and Next defaults may listen on other interfaces. Do not expose this setup publicly or use real customer data. Production authentication, portfolio ownership checks, TLS, hardened Kafka and secret management are not provided. `.env` is plaintext and ignored. The former Compose file contained a fixed development password; the new local variable does not remove that value from Git history. Never reuse historical demo credentials. Ignore rules protect future files, not secrets already tracked in Git.
+
+See [M38-M40 research, risk and copilot guide](docs/M38-M40.md) for contracts, mathematics, verification evidence and exact local commands.
