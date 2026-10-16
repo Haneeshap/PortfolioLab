@@ -1,13 +1,13 @@
 export const DEMO_PORTFOLIO_ID = 1;
 export const OMS_PATH = "/api/portfolio/simulated-orders";
-export const ORDER_STATUSES = ["SUBMITTED", "ACCEPTED", "PARTIALLY_FILLED", "FILLED", "CANCELLED", "REJECTED"] as const;
+export const ORDER_STATUSES = ["SUBMITTED", "ACCEPTED", "PARTIALLY_FILLED", "FILLED", "CANCELLED", "REJECTED", "EXPIRED"] as const;
 export type OrderStatus = typeof ORDER_STATUSES[number];
 export type SimulatedOrder = {
   id: number; portfolioId: number; assetId: number; side: "BUY" | "SELL";
   requestedQuantity: number; filledQuantity: number; status: OrderStatus;
-  failureReason: string | null;
+  failureReason: string | null; orderType?: "MARKET" | "LIMIT"; limitPrice?: number | null; timeInForce?: "DAY" | "GTC"; expiresAt?: string | null;
 };
-export type OrderInput = { assetId: number; type: "BUY" | "SELL"; quantity: number };
+export type OrderInput = { assetId: number; type: "BUY" | "SELL"; quantity: number; orderType?: "MARKET" | "LIMIT"; limitPrice?: number; timeInForce?: "DAY" | "GTC" };
 export function validId(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
@@ -15,6 +15,9 @@ export function validOrderInput(value: unknown): value is OrderInput {
   if (!value || typeof value !== "object") return false;
   const input = value as Record<string, unknown>;
   return validId(input.assetId) && (input.type === "BUY" || input.type === "SELL") &&
+    (input.orderType === undefined || input.orderType === "MARKET" || input.orderType === "LIMIT") &&
+    (input.timeInForce === undefined || input.timeInForce === "DAY" || input.timeInForce === "GTC") &&
+    (input.orderType === "LIMIT" ? typeof input.limitPrice === "number" && Number.isFinite(input.limitPrice) && input.limitPrice > 0 && input.limitPrice < 1e15 && Math.abs(input.limitPrice * 10000 - Math.round(input.limitPrice * 10000)) < 0.001 : input.limitPrice == null) &&
     validId(input.quantity) && input.quantity <= 9_999_999_999_999;
 }
 function quantity(value: unknown): number {
@@ -29,11 +32,17 @@ export function parseOrder(value: unknown, orderId?: number): SimulatedOrder {
       (orderId !== undefined && row.id !== orderId) || (row.side !== "BUY" && row.side !== "SELL") ||
       !ORDER_STATUSES.includes(row.status as OrderStatus) ||
       !(row.failureReason === null || typeof row.failureReason === "string")) throw Error("Invalid OMS response");
+  if ((row.orderType !== undefined && row.orderType !== "MARKET" && row.orderType !== "LIMIT") ||
+      (row.timeInForce !== undefined && row.timeInForce !== "DAY" && row.timeInForce !== "GTC") ||
+      (row.orderType === "LIMIT" && (row.limitPrice == null || !Number.isFinite(Number(row.limitPrice)) || Number(row.limitPrice) <= 0)) ||
+      (row.orderType === "MARKET" && row.limitPrice != null) ||
+      (row.expiresAt != null && (typeof row.expiresAt !== "string" || !Number.isFinite(Date.parse(row.expiresAt))))) throw Error("Invalid order conditions");
   const requestedQuantity = quantity(row.requestedQuantity);
   const filledQuantity = quantity(row.filledQuantity);
   if (requestedQuantity <= 0) throw Error("Invalid OMS response");
   return { id: row.id, portfolioId: DEMO_PORTFOLIO_ID, assetId: row.assetId, side: row.side,
     requestedQuantity, filledQuantity, status: row.status as OrderStatus,
+    orderType: row.orderType as "MARKET" | "LIMIT" | undefined, limitPrice: row.limitPrice == null ? null : Number(row.limitPrice), timeInForce: row.timeInForce as "DAY" | "GTC" | undefined, expiresAt: row.expiresAt as string | null | undefined,
     failureReason: safeFailureReason(row.failureReason as string | null) };
 }
 export function parseOrders(value: unknown): SimulatedOrder[] {
@@ -45,7 +54,7 @@ export function parseOrders(value: unknown): SimulatedOrder[] {
 const withheld = "A failure reason is recorded; internal details are withheld.";
 export function safeFailureReason(reason: string | null): string | null {
   if (!reason?.trim()) return null;
-  if (["Insufficient virtual cash", "Insufficient holdings", "Order rejected by settlement"].includes(reason) ||
+  if (["Insufficient virtual cash", "Insufficient holdings", "Insufficient available buying power", "Insufficient available shares", "Order rejected by settlement"].includes(reason) ||
       /^Pre-trade risk rejected order: (MAX_ORDER_VALUE|MAX_POSITION_COST_CONCENTRATION)(, (MAX_ORDER_VALUE|MAX_POSITION_COST_CONCENTRATION))*$/.test(reason)) return reason;
   return withheld;
 }
@@ -95,7 +104,10 @@ export async function submitSimulatedOrder(input: OrderInput): Promise<Simulated
     : `Submission was not accepted (${response.status}). Review the inputs and refresh Recent Orders.`);
   try {
     const order = parseOrder(await response.json());
-    if (order.assetId !== input.assetId || order.side !== input.type || order.requestedQuantity !== input.quantity) throw Error();
+    if (order.assetId !== input.assetId || order.side !== input.type || order.requestedQuantity !== input.quantity ||
+        (input.orderType !== undefined && order.orderType !== input.orderType) ||
+        (input.orderType === "LIMIT" && order.limitPrice !== input.limitPrice) ||
+        (input.timeInForce !== undefined && order.timeInForce !== input.timeInForce)) throw Error();
     return order;
   } catch { throw Error("Submission returned an unexpected response. Refresh Recent Orders before submitting again; an order may already exist."); }
 }

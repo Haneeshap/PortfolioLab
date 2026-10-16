@@ -56,6 +56,13 @@ class ReconciliationService {
                 WHEN o.status='PARTIALLY_FILLED' AND (o.filled_quantity<=0 OR o.filled_quantity>=o.requested_quantity) THEN 'INVALID_PARTIAL_STATUS'
                 WHEN o.status IN ('SUBMITTED','ACCEPTED','REJECTED') AND o.filled_quantity<>0 THEN 'INVALID_UNFILLED_STATUS'
                 WHEN o.status='CANCELLED' AND o.filled_quantity>o.requested_quantity THEN 'INVALID_CANCELLED_STATUS'
+                WHEN o.status NOT IN ('SUBMITTED','ACCEPTED','PARTIALLY_FILLED') AND (o.reserved_cash<>0 OR o.reserved_shares<>0) THEN 'TERMINAL_RESERVATION'
+                WHEN o.status IN ('SUBMITTED','ACCEPTED','PARTIALLY_FILLED') AND NOT o.reservation_managed THEN 'LEGACY_UNRESERVED_ORDER'
+                WHEN o.reservation_managed AND o.status IN ('SUBMITTED','ACCEPTED','PARTIALLY_FILLED') AND
+                 ((o.side='BUY' AND o.cash_per_share<=0) OR o.reserved_cash<>CASE WHEN o.side='BUY' THEN o.cash_per_share*(o.requested_quantity-o.filled_quantity) ELSE 0 END OR
+                  o.reserved_shares<>CASE WHEN o.side='SELL' THEN o.requested_quantity-o.filled_quantity ELSE 0 END) THEN 'RESERVATION_QUANTITY_MISMATCH'
+                WHEN (SELECT COALESCE(SUM(x.reserved_cash),0) FROM simulated_orders x WHERE x.portfolio_id=o.portfolio_id) > (SELECT cash_balance FROM portfolios WHERE id=o.portfolio_id) THEN 'OVER_RESERVED_CASH'
+                WHEN (SELECT COALESCE(SUM(x.reserved_shares),0) FROM simulated_orders x WHERE x.portfolio_id=o.portfolio_id AND x.asset_id=o.asset_id) > (SELECT COALESCE(SUM(quantity),0) FROM holdings WHERE portfolio_id=o.portfolio_id AND asset_id=o.asset_id) THEN 'OVER_RESERVED_SHARES'
                 ELSE NULL END AS code
             FROM simulated_orders o
             LEFT JOIN receipts r ON r.order_id=o.id

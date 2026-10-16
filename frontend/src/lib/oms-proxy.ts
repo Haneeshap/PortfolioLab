@@ -26,7 +26,7 @@ export async function submitOrderProxy(request: Request) {
   let body: unknown;
   try { body = await request.json(); } catch { return reply({ error: "Invalid JSON request." }, 400); }
   if (!validOrderInput(body)) return reply({ error: "Invalid asset, side, or whole-share quantity (maximum 13 digits)." }, 400);
-  return forward("POST", undefined, false, { assetId: body.assetId, type: body.type, quantity: body.quantity });
+  return forward("POST", undefined, false, { assetId: body.assetId, type: body.type, quantity: body.quantity, orderType: body.orderType, limitPrice: body.limitPrice, timeInForce: body.timeInForce });
 }
 export async function orderProxy(rawId: string, cancel = false) {
   if (!/^[1-9]\d*$/.test(rawId) || !validId(Number(rawId))) return reply({ error: "Invalid order ID." }, 400);

@@ -1,6 +1,6 @@
 import { isActiveOrder, type SimulatedOrder } from "./simulated-orders";
 
-type PollOptions = {
+export type PollOptions = {
   read: (signal: AbortSignal) => Promise<SimulatedOrder[]>;
   initial: SimulatedOrder[];
   onSnapshot: (orders: SimulatedOrder[]) => void;

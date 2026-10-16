@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { startOrderUpdates } from "@/lib/order-updates";
+import { readOrders } from "@/lib/simulated-orders";
 import { useMarketPrices } from "@/components/MarketPriceProvider";
 import {
   valueHolding,
@@ -57,16 +59,16 @@ export function formatMoney(value: number, currency: string) {
   }).format(value);
 }
 
-export function usePortfolioData() {
+export function usePortfolioData(liveOrders = false) {
   const [data, setData] = useState<PortfolioData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const { prices, status } = useMarketPrices();
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (signal?: AbortSignal) => {
     const response = await fetch("/api/portfolio", {
-      cache: "no-store",
+      signal, cache: "no-store",
     });
 
     if (!response.ok) {
@@ -74,9 +76,19 @@ export function usePortfolioData() {
     }
 
     const result: PortfolioData = await response.json();
+    if(signal?.aborted) return;
     setData(result);
     setError(null);
   }, []);
+
+  useEffect(() => {
+    if(!liveOrders) return;
+    const controller=new AbortController();
+    const stop=startOrderUpdates({initial:[],read:signal=>readOrders(signal,[],null),onSnapshot:()=>{},
+      onPortfolioChange:()=>refresh(controller.signal),onError:message=>{if(message) setError(message);},
+      onPaused:()=>setError("Live order updates are reconnecting. Refresh the portfolio to check its latest state.")});
+    return ()=>{controller.abort();stop();};
+  },[liveOrders,refresh]);
 
   useEffect(() => {
     let active = true;

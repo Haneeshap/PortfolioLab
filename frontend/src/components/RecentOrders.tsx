@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { cancelSimulatedOrder, cancelWithConfirmation, isActiveOrder, orderIsConsistent,
   readOrders, type SimulatedOrder } from "@/lib/simulated-orders";
-import { startOrderPolling } from "@/lib/order-polling";
+import { startOrderUpdates } from "@/lib/order-updates";
 
 const unfilled = (order: SimulatedOrder) => order.filledQuantity <= order.requestedQuantity
   ? order.requestedQuantity - order.filledQuantity : "Inconsistent";
@@ -13,7 +13,7 @@ export function RecentOrderRow({ order, symbol, cancelling, onView, onCancel }: 
   onView: (id: number) => void; onCancel: (order: SimulatedOrder) => void;
 }) {
   return <tr className="border-t border-slate-800 align-top">
-    <td className="p-2">#{order.id} · {symbol} · {order.side}</td>
+    <td className="p-2">#{order.id} · {symbol} · {order.side}<p>{order.orderType ?? "MARKET"} {order.limitPrice ?? ""} / {order.timeInForce ?? "GTC"}</p>{order.expiresAt && <p>Expires {new Date(order.expiresAt).toLocaleString()}</p>}</td>
     <td className="p-2"><span>{order.status}</span>
       {order.failureReason && <p className="mt-1 max-w-xs text-amber-300">{order.failureReason}</p>}
       {!orderIsConsistent(order) && <p className="text-amber-300">Status and quantities disagree. Ask AI to investigate order {order.id}.</p>}
@@ -56,10 +56,11 @@ export default function RecentOrders({ submittedOrder, onOrdersChanged, assets }
     }
     setLoading(true);
     setPaused(false);
-    stopPolling.current = startOrderPolling({
+    stopPolling.current = startOrderUpdates({
       initial,
       read: signal => readOrders(signal, snapshot.current, selectedId),
       onSnapshot: rows => {
+        setPaused(false);
         snapshot.current = rows;
         setOrders(rows);
         setLoading(false);
@@ -104,7 +105,7 @@ export default function RecentOrders({ submittedOrder, onOrdersChanged, assets }
     </div>
     <p className="mt-2 text-xs text-slate-400">Latest 100 M31 orders, plus orders being tracked. Submitted orders await execution; prices and buying power may change. Earlier fills remain settled after cancellation.</p>
     {loading && <p role="status" className="mt-3 text-sm text-slate-400">Loading order statuses...</p>}
-    {paused && <p role="status" className="mt-3 text-sm text-amber-300">Automatic updates paused after the polling limit or repeated failures. Refresh orders to resume.</p>}
+    {paused && <p role="status" className="mt-3 text-sm text-amber-300">Fallback polling paused after its request limit or repeated failures. The live stream will reconnect; refresh orders to retry now.</p>}
     {error && <p role="alert" className="mt-3 text-sm text-red-300">{error}</p>}
     {!loading && !error && orders.length === 0 && <p className="mt-3 text-sm text-slate-400">No recent simulated orders.</p>}
     {orders.length > 0 && <div className="mt-3 max-h-80 overflow-auto">

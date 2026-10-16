@@ -94,10 +94,22 @@ export default function TradeForm({
   }, [holdingTradeRequest, assets]);
 
   const [type, setType] = useState<"BUY" | "SELL">("BUY");
+  const [orderType, setOrderType] = useState<"MARKET" | "LIMIT">("MARKET");
+  const [limitPrice, setLimitPrice] = useState("");
+  const [timeInForce, setTimeInForce] = useState<"DAY" | "GTC">("DAY");
   const [quantity, setQuantity] = useState("1");
   const [submitting, setSubmitting] = useState(false);
   const submissionInFlight = useRef(false);
   const [submittedOrder, setSubmittedOrder] = useState<SimulatedOrder | null>(null);
+  const [availability, setAvailability] = useState<{availableBuyingPower:number;reservedCash:number;positions:{asset_id:number;reserved_quantity:number;available_quantity:number}[]} | null>(null);
+  useEffect(() => {
+    const controller=new AbortController();
+    void fetch("/api/portfolio/simulated-orders/availability",{signal:controller.signal,cache:"no-store"})
+      .then(async response => {if(!response.ok) throw Error();return response.json();})
+      .then(value => {if(!controller.signal.aborted) setAvailability(value);}).catch(() => {if(!controller.signal.aborted) setAvailability(null);});
+    return () => controller.abort();
+  },[portfolio,submittedOrder]);
+  const buyingPower=availability===null?null:Number(availability.availableBuyingPower);
   const [market, setMarket] = useState<Market>("NSE");
   const [validating, setValidating] = useState(false);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
@@ -167,9 +179,11 @@ export default function TradeForm({
     (holding) => holding.assetId === selectedAsset?.id
   );
 
-  const availableShares = matchingHolding?.quantity ?? 0;
+  const reservedPosition=availability?.positions.find(p => Number(p.asset_id)===selectedAsset?.id);
+  const availableShares = reservedPosition ? Number(reservedPosition.available_quantity) : matchingHolding?.quantity ?? 0;
 
   const validationKey = JSON.stringify({
+    orderType, limitPrice, timeInForce,
     portfolioId: portfolio.id,
     assetId: selectedAsset?.id,
     type,
@@ -181,7 +195,7 @@ export default function TradeForm({
     marketConnectionStatus: status,
     quoteIsValid,
 
-    portfolioCash: portfolio.cashBalance,
+    portfolioCash: portfolio.cashBalance, buyingPower,
     portfolioCurrency: portfolio.currency,
     availableShares,
   });
@@ -313,12 +327,12 @@ export default function TradeForm({
       market: selectedMarket,
       side: type,
       quantity: parsedQuantity,
-      price: liveQuote.price,
+      price: orderType === "LIMIT" ? Number(limitPrice) : liveQuote.price,
       quantityIncrement: 1,
       ...(type === "BUY"
         ? {
             ...(portfolio.currency === selectedAsset.currency
-              ? { availableCash: portfolio.cashBalance }
+              ? { availableCash: buyingPower ?? 0 }
               : {}),
             // Charges are unknown until the execution cost model is checked.
             // Omitting them intentionally produces NEEDS_DATA.
@@ -339,7 +353,7 @@ export default function TradeForm({
     body: JSON.stringify({
       assetId: selectedAsset.id,
       type,
-      quantity: parsedQuantity,
+      quantity: parsedQuantity, orderType, timeInForce, ...(orderType === "LIMIT" ? {limitPrice: Number(limitPrice)} : {}),
     }),
     cache: "no-store",
     signal: controller.signal,
@@ -450,7 +464,7 @@ setValidatedKey(requestKey);
     setError(null);
 
     try {
-      const result = await submitSimulatedOrder({ assetId: selectedAsset.id, type, quantity: parsedQuantity });
+      const result = await submitSimulatedOrder({ assetId: selectedAsset.id, type, quantity: parsedQuantity, orderType, timeInForce, ...(orderType === "LIMIT" ? {limitPrice: Number(limitPrice)} : {}) });
       setSubmittedOrder(result);
 
       setMessage(
@@ -482,7 +496,12 @@ setValidatedKey(requestKey);
       <div className="mt-6 grid items-start gap-6 lg:grid-cols-2">
         <div className="min-w-0 rounded-xl border border-slate-700 bg-slate-950/50 p-5">
           <h4 className="mb-4 text-lg font-semibold">Trade ticket</h4>
+          <p className="text-sm text-slate-300">Available buying power: {buyingPower===null?"Unavailable":formatMoney(buyingPower,portfolio.currency)}; reserved cash: {availability?formatMoney(Number(availability.reservedCash),portfolio.currency):"Unavailable"}. Available shares: {availableShares}; reserved: {Number(reservedPosition?.reserved_quantity ?? 0)}.</p>
           <form onSubmit={submitTrade} className="space-y-4">
+          <label className="block">Order type <select aria-label="Order type" value={orderType} onChange={e => setOrderType(e.target.value as "MARKET" | "LIMIT")} disabled={submitting} className="bg-slate-950 p-3"><option>MARKET</option><option>LIMIT</option></select></label>
+          {orderType === "LIMIT" && <label className="block">Limit price (asset currency)<input aria-label="Limit price" type="number" min="0.0001" step="0.0001" required value={limitPrice} onChange={e => setLimitPrice(e.target.value)} disabled={submitting} className="bg-slate-950 p-3" /></label>}
+          <label className="block">Time in force <select aria-label="Time in force" value={timeInForce} onChange={e => setTimeInForce(e.target.value as "DAY" | "GTC")} disabled={submitting} className="bg-slate-950 p-3"><option>DAY</option><option>GTC</option></select></label>
+          <p className="text-xs text-slate-400">DAY expires at midnight India time in this continuous simulated market. GTC remains until filled or cancelled.</p>
         <div>
           <label htmlFor="trade-asset" className="mb-2 block text-sm">
             Asset

@@ -1,4 +1,5 @@
-﻿import { NextRequest, NextResponse } from "next/server";
+﻿import { validOrderInput } from "@/lib/simulated-orders";
+import { NextRequest, NextResponse } from "next/server";
 
 const backend = process.env.BACKEND_URL ?? "http://localhost:8080";
 
@@ -27,7 +28,8 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { assetId, type, quantity } = body;
+  if (!validOrderInput(body)) return NextResponse.json({error:"Invalid order inputs"},{status:400});
+  const { assetId, type, quantity, orderType, limitPrice, timeInForce } = body;
 
   if (
     typeof assetId !== "number" ||
@@ -50,7 +52,7 @@ export async function POST(request: NextRequest) {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ assetId, type, quantity }),
+        body: JSON.stringify({ assetId, type, quantity, orderType, limitPrice, timeInForce }),
         cache: "no-store",
         signal: AbortSignal.timeout(15000),
       }

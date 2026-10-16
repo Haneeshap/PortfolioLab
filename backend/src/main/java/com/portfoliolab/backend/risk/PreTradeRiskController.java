@@ -37,6 +37,7 @@ public class PreTradeRiskController {
         Asset asset=assets.findById(request.assetId())
             .orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND,"Asset not found"));
         OrderPricingService.Pricing quote=pricing.calculate(asset,portfolio,quantity);
-        return risk.evaluate(portfolio,asset,side,quantity,quote.portfolioTotal());
+        com.portfoliolab.backend.oms.OrderConditions.validate(request.orderType()==null?"MARKET":request.orderType(),request.limitPrice(),request.timeInForce()==null?"GTC":request.timeInForce());
+        return risk.evaluate(portfolio,asset,side,quantity,request.limitPrice()==null?quote.portfolioTotal():request.limitPrice().multiply(quote.fxRate()).multiply(quantity));
     }
 }

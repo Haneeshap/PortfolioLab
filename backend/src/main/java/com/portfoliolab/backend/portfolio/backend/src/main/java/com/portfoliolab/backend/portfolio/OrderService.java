@@ -16,6 +16,7 @@ import java.util.Locale;
 @Service
 public class OrderService {
 
+    @org.springframework.beans.factory.annotation.Autowired private com.portfoliolab.backend.oms.OrderReservations reservations;
     private final PortfolioRepository portfolioRepository;
     private final AssetRepository assetRepository;
     private final HoldingRepository holdingRepository;
@@ -58,6 +59,7 @@ public class OrderService {
             );
         }
 
+        com.portfoliolab.backend.oms.OrderConditions.validate(request.orderType()==null?"MARKET":request.orderType(),request.limitPrice(),request.timeInForce()==null?"GTC":request.timeInForce());
         String type = request.type().trim().toUpperCase(Locale.ROOT);
         BigDecimal quantity = request.quantity();
 
@@ -94,6 +96,8 @@ public class OrderService {
         OrderPricingService.Pricing pricing =
                 pricingService.calculate(asset, portfolio, quantity);
 
+        if (!com.portfoliolab.backend.oms.OrderConditions.eligible(type, request.limitPrice(), pricing.price()))
+            throw new com.portfoliolab.backend.oms.OrderConditions.PriceNotEligible();
         BigDecimal price = pricing.price();
         BigDecimal total = pricing.assetTotal();
         BigDecimal executionFxRate = pricing.fxRate();
@@ -104,6 +108,7 @@ public class OrderService {
                 .orElse(null);
 
         preTradeRiskService.enforce(portfolio, asset, type, quantity, portfolioAmount);
+        if(reservations!=null) reservations.enforce(portfolio,asset,type,quantity,portfolioAmount,-1);
 
         if (type.equals("BUY")) {
             processBuy(portfolio, asset, holding, quantity, price, portfolioAmount);

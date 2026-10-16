@@ -5,7 +5,7 @@ PortfolioLab is a local educational portfolio and simulated trading system. A Ne
 ## Features and architecture
 
 - Portfolio cash, holdings, allocation, valuation, performance history and transactions.
-- Simulated buy/sell previews, pre-trade risk checks, order lifecycle, execution receipts and reconciliation.
+- Simulated buy/sell previews, pre-trade risk checks, MARKET/LIMIT orders with DAY/GTC expiration, cash/share reservations, SSE lifecycle updates, execution receipts and reconciliation.
 - Live simulated prices, watchlists, price alerts, market intelligence and persistent notifications.
 - Dividend/bonus calculations, dividend scheduling, business rules and FX conversion/attribution.
 - Ask AI educational explanations, holdings analysis and read-only order/reconciliation evidence.
@@ -16,6 +16,7 @@ Browser :3000 --> Next.js API routes --> Spring Boot :8080 --> PostgreSQL :5432
     |                   +--> AI :3101 --> MCP stdio child --> Spring Boot
     |                              +---> Ollama :11434
     +--WebSocket--> Go :8081 <--HTTP-- Spring Boot
+Browser --SSE--> Next.js order event proxy --> Spring committed order journal
 Spring outbox --> Kafka :9092 --> notification consumer --> PostgreSQL --> UI polling
 ```
 
@@ -27,7 +28,7 @@ Spring outbox --> Kafka :9092 --> notification consumer --> PostgreSQL --> UI po
 | `compose.yaml` | PostgreSQL 17, Apache Kafka 3.9.1, named volumes and loopback host ports |
 | sibling `portfoliolab-ai/` | Node/TypeScript, tsx, MCP client/server SDK 2.3.1 range, Zod; Ollama qwen2.5:0.5b |
 
-Flyway automatically applies migrations V1–V17 under `backend/src/main/resources/db/migration`. They seed assets and INR Demo Portfolio (ID 1, initial cash 100000), then add history, FX, outbox/notifications, events, alerts, watchlists, intelligence, risk policies and simulated orders/executions. A fresh database has no traded holdings or execution receipts. Hibernate validates the schema; no database dump or manual table creation is needed.
+Flyway automatically applies migrations V1–V20 under `backend/src/main/resources/db/migration`. They seed assets and INR Demo Portfolio (ID 1, initial cash 100000), then add history, FX, outbox/notifications, events, alerts, watchlists, intelligence, risk policies and simulated orders/executions. A fresh database has no traded holdings or execution receipts. Hibernate validates the schema; no database dump or manual table creation is needed.
 
 Some Java files sit in unusually deep repeated source paths. Maven still compiles below its source root; search by class name when navigating. Backups are not application components.
 
@@ -221,6 +222,8 @@ Remove-Item Env:DB_PASSWORD
 ```
 
 Backend Spring integration tests use the configured development PostgreSQL database, not a disposable isolated fixture. `ReconciliationSqlIntegrationTests` requires an existing filled simulated order/execution receipt with initially consistent evidence. Make a small simulated buy through the UI before the full suite; its mismatch mutation rolls back. For an initial run before that fixture exists, explicitly exclude it with `.\mvnw.cmd '-Dtest=*,!ReconciliationSqlIntegrationTests' test` and record that exclusion. AI tests mock HTTP evidence and test real MCP stdio discovery; Ollama is not required for those tests.
+
+See [M35-M37 implementation and verification](docs/M35-M37.md) for the new contracts, migration behavior, reservation policy, checks and manual workflow.
 
 See [ONBOARDING-VALIDATION.md](docs/ONBOARDING-VALIDATION.md) for actual results, existing failures and checks that could not run.
 

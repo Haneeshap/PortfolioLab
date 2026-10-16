@@ -38,7 +38,7 @@ export default function OverviewDashboard() {
     investedAmount,
     unrealizedProfitLoss,
     isPortfolioLive,
-  } = usePortfolioData();
+  } = usePortfolioData(true);
 
   if (loading) {
     return <p className="text-slate-400">Loading overview...</p>;

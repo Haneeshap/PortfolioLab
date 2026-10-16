@@ -21,6 +21,7 @@ import java.util.UUID;
 @Component
 public class SimulatedExchangeWorker {
     private static final Logger log = LoggerFactory.getLogger(SimulatedExchangeWorker.class);
+    @org.springframework.beans.factory.annotation.Autowired private OrderReservations reservations;
     private final JdbcTemplate jdbc;
     private final OrderService settlement;
     private final TransactionTemplate tx;
@@ -32,27 +33,39 @@ public class SimulatedExchangeWorker {
     }
 
     record Pending(long id, long portfolioId, long assetId, String side,
-                   BigDecimal requested, BigDecimal filled, String status) {}
+                   BigDecimal requested, BigDecimal filled, String status, BigDecimal limit, java.time.Instant expires) {}
 
-    @Scheduled(fixedDelay = 2500, initialDelay = 5000)
-    public void executeNext() {
+    @Scheduled(fixedDelayString = "${oms.worker.delay:2500}", initialDelayString = "${oms.worker.initial-delay:5000}")
+    public void executeNext() { executePortfolio(null); }
+
+    void executePortfolio(Long portfolioId) {
         final long[] attemptedId = {-1};
+        final long[] attemptedPortfolio = {-1};
         // Each cycle processes at most one order. Lock prevents concurrent fills/cancellation.
         try {
             tx.executeWithoutResult(ignored -> {
+                List<Long> candidates=jdbc.queryForList("SELECT portfolio_id FROM simulated_orders WHERE status IN ('SUBMITTED','ACCEPTED','PARTIALLY_FILLED') "+(portfolioId==null?"":" AND portfolio_id="+portfolioId)+" ORDER BY updated_at,id LIMIT 1",Long.class);
+                if(candidates.isEmpty()) return;
+                reservations.lock(candidates.get(0));
                 List<Pending> pending = jdbc.query("""
                     SELECT id, portfolio_id, asset_id, side, requested_quantity,
-                           filled_quantity, status
+                           filled_quantity, status, limit_price, expires_at
                     FROM simulated_orders
-                    WHERE status IN ('SUBMITTED','ACCEPTED','PARTIALLY_FILLED')
-                    ORDER BY id ASC LIMIT 1 FOR UPDATE SKIP LOCKED
+                    WHERE status IN ('SUBMITTED','ACCEPTED','PARTIALLY_FILLED') AND portfolio_id=?
+                    ORDER BY updated_at ASC,id ASC LIMIT 1 FOR UPDATE SKIP LOCKED
                     """, (rs, row) -> new Pending(
                         rs.getLong("id"), rs.getLong("portfolio_id"), rs.getLong("asset_id"),
                         rs.getString("side"), rs.getBigDecimal("requested_quantity"),
-                        rs.getBigDecimal("filled_quantity"), rs.getString("status")));
+                        rs.getBigDecimal("filled_quantity"), rs.getString("status"),rs.getBigDecimal("limit_price"),rs.getTimestamp("expires_at")==null?null:rs.getTimestamp("expires_at").toInstant()),candidates.get(0));
                 if (pending.isEmpty()) return;
                 Pending order = pending.get(0);
                 attemptedId[0] = order.id();
+                attemptedPortfolio[0]=order.portfolioId();
+                if (order.expires()!=null && !order.expires().isAfter(java.time.Instant.now())) {
+                    reservations.release(order.id());
+                    jdbc.update("UPDATE simulated_orders SET status='EXPIRED',updated_at=NOW() WHERE id=?",order.id());
+                    return;
+                }
                 if (order.status().equals("SUBMITTED")) {
                     jdbc.update("UPDATE simulated_orders SET status='ACCEPTED',updated_at=NOW() WHERE id=?", order.id());
                     return;
@@ -64,8 +77,10 @@ public class SimulatedExchangeWorker {
                     ? remaining : remaining.divide(new BigDecimal("2"), 0, java.math.RoundingMode.CEILING);
                 // Settlement enforces risk, buying power, holdings, pricing, FX, notifications.
                 // Its @Transactional method joins this transaction; rollback is all-or-nothing.
+                reservations.remaining(order.id(),remaining.subtract(fillQty));
                 OrderResponse trade = settlement.placeOrder(order.portfolioId(),
-                    new OrderRequest(order.assetId(), order.side(), fillQty));
+                    new OrderRequest(order.assetId(), order.side(), fillQty,order.limit()==null?"MARKET":"LIMIT",order.limit(),"GTC"));
+                if(order.expires()!=null && !order.expires().isAfter(java.time.Instant.now())) throw new ExpiredDuringFill();
                 int sequence = jdbc.queryForObject("""
                     SELECT COALESCE(MAX(fill_sequence),0)+1
                     FROM simulated_exchange_executions WHERE order_id=?
@@ -81,14 +96,23 @@ public class SimulatedExchangeWorker {
                     VALUES (?,?,?,?)
                     """, order.id(), trade.transactionId(), sequence, fillQty);
                 BigDecimal cumulative = order.filled().add(fillQty);
+                reservations.remaining(order.id(),order.requested().subtract(cumulative));
                 String status = cumulative.compareTo(order.requested()) == 0 ? "FILLED" : "PARTIALLY_FILLED";
                 jdbc.update("""
                     UPDATE simulated_orders SET filled_quantity=?,status=?,updated_at=NOW() WHERE id=?
                     """, cumulative, status, order.id());
                 log.info("Simulated order {}: {} {} shares; {}", order.id(), reference, fillQty, status);
             });
+        } catch (ExpiredDuringFill ex) {
+            tx.executeWithoutResult(ignored -> {
+                reservations.lock(attemptedPortfolio[0]);
+                jdbc.update("UPDATE simulated_orders SET status='EXPIRED',reserved_cash=0,reserved_shares=0,updated_at=NOW() WHERE id=? AND status IN ('SUBMITTED','ACCEPTED','PARTIALLY_FILLED')",attemptedId[0]);
+            });
+        } catch (OrderConditions.PriceNotEligible ex) {
+            defer(attemptedId[0]);
         } catch (ResponseStatusException ex) {
             if (ex.getStatusCode().is5xxServerError()) {
+                defer(attemptedId[0]);
                 log.warn("Simulated execution temporarily unavailable; will retry: {}", ex.getReason());
                 return;
             }
@@ -96,18 +120,27 @@ public class SimulatedExchangeWorker {
             String reason = ex.getReason() == null ? "Order rejected by settlement" : ex.getReason();
             try {
                 if (attemptedId[0] < 0) return;
-                tx.executeWithoutResult(ignored -> jdbc.update("""
+                tx.executeWithoutResult(ignored -> {reservations.lock(attemptedPortfolio[0]);jdbc.update("""
                     UPDATE simulated_orders
 SET status=CASE WHEN filled_quantity>0 THEN 'CANCELLED' ELSE 'REJECTED' END,
-    failure_reason=?,
+    reserved_cash=0,reserved_shares=0,failure_reason=?,
     updated_at=NOW()
                     WHERE id=? AND status IN ('SUBMITTED','ACCEPTED','PARTIALLY_FILLED')
-                    """, reason, attemptedId[0]));
+                    """, reason, attemptedId[0]);});
             } catch (Exception failure) { log.warn("Unable to persist rejection", failure); }
             log.warn("Simulated execution rejected: {}", reason);
         } catch (Exception ex) {
             // Transient market/FX or infrastructure failures must not silently reject orders.
+            defer(attemptedId[0]);
             log.warn("Simulated exchange cycle rolled back; will retry: {}", ex.toString());
         }
     }
+    private static class ExpiredDuringFill extends RuntimeException {}
+
+    private void defer(long orderId) {
+        if(orderId<0) return;
+        try {tx.executeWithoutResult(ignored -> jdbc.update("UPDATE simulated_orders SET updated_at=NOW() WHERE id=? AND status IN ('SUBMITTED','ACCEPTED','PARTIALLY_FILLED')",orderId));}
+        catch(Exception ex){log.warn("Unable to defer order {}",orderId);}
+    }
+
 }
