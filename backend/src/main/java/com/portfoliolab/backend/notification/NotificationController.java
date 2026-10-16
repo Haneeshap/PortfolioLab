@@ -32,16 +32,18 @@ public class NotificationController {
 
     @GetMapping
     public List<NotificationView> list(
-            @PathVariable Long portfolioId
+            @PathVariable Long portfolioId,
+            @RequestParam(defaultValue="9223372036854775807") long before,
+            @RequestParam(defaultValue="50") int limit
     ) {
         return jdbc.query(
                 """
                 SELECT id, source, title, message,
                        target_url, created_at, read_at
                 FROM notifications
-                WHERE portfolio_id = ?
-                ORDER BY created_at DESC, id DESC
-                LIMIT 50
+                WHERE portfolio_id = ? AND id < ?
+                ORDER BY id DESC
+                LIMIT ?
                 """,
                 (rs, rowNum) -> {
                     Timestamp created = rs.getTimestamp("created_at");
@@ -56,7 +58,7 @@ public class NotificationController {
                             rs.getTimestamp("read_at") != null
                     );
                 },
-                portfolioId
+                portfolioId, before, Math.max(1,Math.min(limit,100))
         );
     }
 
@@ -76,6 +78,13 @@ public class NotificationController {
         );
 
         return Map.of("count", count == null ? 0L : count);
+    }
+
+    @PatchMapping("/{notificationId}/unread")
+    public Map<String,Boolean> markUnread(@PathVariable Long portfolioId,@PathVariable Long notificationId) {
+        if(jdbc.update("UPDATE notifications SET read_at=NULL WHERE id=? AND portfolio_id=?",notificationId,portfolioId)==0)
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Notification not found");
+        return Map.of("success",true);
     }
 
     @PatchMapping("/{notificationId}/read")

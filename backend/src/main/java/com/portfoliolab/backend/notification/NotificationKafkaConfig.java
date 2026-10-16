@@ -43,6 +43,10 @@ public class NotificationKafkaConfig {
         );
 
         properties.put(ProducerConfig.ACKS_CONFIG, "all");
+        properties.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+        properties.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, 5000);
+        properties.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, 5000);
+        properties.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 10000);
 
         return new DefaultKafkaProducerFactory<>(properties);
     }
@@ -87,6 +91,7 @@ public class NotificationKafkaConfig {
                 ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG,
                 false
         );
+        properties.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 25);
 
         return new DefaultKafkaConsumerFactory<>(properties);
     }
@@ -100,6 +105,12 @@ public class NotificationKafkaConfig {
                 new ConcurrentKafkaListenerContainerFactory<String, String>();
 
         factory.setConsumerFactory(notificationConsumerFactory);
+        factory.getContainerProperties().setAckMode(org.springframework.kafka.listener.ContainerProperties.AckMode.RECORD);
+        // Never discard a committed outbox event during a prolonged database outage.
+        var errors = new org.springframework.kafka.listener.DefaultErrorHandler(
+                new org.springframework.util.backoff.FixedBackOff(5000L, Long.MAX_VALUE));
+        errors.addRetryableExceptions(IllegalArgumentException.class);
+        factory.setCommonErrorHandler(errors);
 
         return factory;
     }

@@ -37,6 +37,7 @@ export default function ActivityHistory() {
             {transactions.map((transaction) => (
               <div
                 key={transaction.id}
+                id={`transaction-${transaction.id}`}
                 className="flex flex-wrap items-center justify-between gap-4 px-6 py-5"
               >
                 <div>

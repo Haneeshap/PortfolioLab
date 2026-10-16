@@ -1,26 +1,26 @@
-import { NextResponse } from "next/server";
+
 
 const backend = process.env.BACKEND_URL ?? "http://localhost:8080";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const response = await fetch(
-      `${backend}/api/portfolios/1/notifications`,
+      `${backend}/api/portfolios/1/notifications${new URL(request.url).search}`,
       { cache: "no-store" }
     );
 
     if (!response.ok) {
-      return NextResponse.json(
+      return Response.json(
         { error: "Unable to retrieve notifications" },
         { status: response.status }
       );
     }
 
-    return NextResponse.json(await response.json(), {
+    return Response.json(await response.json(), {
       headers: { "Cache-Control": "no-store" },
     });
   } catch {
-    return NextResponse.json(
+    return Response.json(
       { error: "Notification service unavailable" },
       { status: 503 }
     );

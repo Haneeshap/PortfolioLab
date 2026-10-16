@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import NotificationCenter from "./NotificationCenter";
+import { startNotificationUpdates } from "@/lib/notification-updates";
 
 export default function NotificationBell() {
   const [open, setOpen] = useState(false);
@@ -17,13 +18,17 @@ export default function NotificationBell() {
     } catch { /* Bell should not break the rest of the app. */ }
   }, []);
   useEffect(() => {
+    // Fetch persisted unread state on mount or when opening the menu.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void refresh();
-    const timer = window.setInterval(() => { if (!document.hidden) void refresh(); }, 15000);
+    const stop = startNotificationUpdates(() => window.dispatchEvent(new Event("portfoliolab:notifications-updated")));
     window.addEventListener("portfoliolab:notifications-updated", refresh);
-    return () => { window.clearInterval(timer); window.removeEventListener("portfoliolab:notifications-updated", refresh); };
+    return () => { stop(); window.removeEventListener("portfoliolab:notifications-updated", refresh); };
   }, [refresh]);
   useEffect(() => {
     if (!open) return;
+    // Fetch persisted unread state on mount or when opening the menu.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void refresh();
     const pointer = (event: PointerEvent) => { if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false); };
     const key = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };

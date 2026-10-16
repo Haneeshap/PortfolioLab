@@ -9,6 +9,19 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 class OrderEventStreamTests {
+ @Test void notificationHintsArePortfolioScopedAndReconnectAlwaysResets() throws Exception {
+  var jdbc=mock(JdbcTemplate.class);
+  when(jdbc.queryForObject(anyString(),eq(Long.class),eq(1L))).thenReturn(0L);
+  when(jdbc.queryForList(contains("FROM notifications"),eq(Long.class),eq(1L),eq(0L))).thenReturn(List.of(7L));
+  var stream=new OrderEventStream(jdbc);
+  var mvc=MockMvcBuilders.standaloneSetup(new OrderEventController(stream)).build();
+  var first=mvc.perform(get("/api/portfolios/1/simulated-orders/events")).andReturn();
+  stream.dispatch();
+  assertTrue(first.getResponse().getContentAsString().contains("event:notification"));
+  verify(jdbc).queryForList(contains("portfolio_id=? AND id>?"),eq(Long.class),eq(1L),eq(0L));
+  var reconnect=mvc.perform(get("/api/portfolios/1/simulated-orders/events").header("Last-Event-ID","0")).andReturn();
+  assertTrue(reconnect.getResponse().getContentAsString().contains("event:reset"));
+ }
  @Test void emitsResetThenOrderedCommittedEventsAndResumesCursor() throws Exception {
   var jdbc=mock(JdbcTemplate.class);
   when(jdbc.queryForObject(anyString(),eq(Long.class),eq(1L))).thenReturn(43L);

@@ -18,7 +18,7 @@ public class OrderEventStream {
  private final JdbcTemplate jdbc;
  private final Set<Client> clients=ConcurrentHashMap.newKeySet();
  static final class Client {
-  final long portfolioId; final SseEmitter emitter; long cursor;
+  final long portfolioId; final SseEmitter emitter; long cursor; long notificationCursor;
   Client(long portfolioId,SseEmitter emitter,long cursor){this.portfolioId=portfolioId;this.emitter=emitter;this.cursor=cursor;}
  }
  public record Event(long eventId,long portfolioId,long orderId,String status,BigDecimal requestedQuantity,BigDecimal filledQuantity) {}
@@ -39,6 +39,7 @@ public class OrderEventStream {
   }
   var emitter=new SseEmitter(120000L);
   var client=new Client(portfolioId,emitter,cursor);
+  client.notificationCursor=jdbc.queryForObject("SELECT COALESCE(MAX(id),0) FROM notifications WHERE portfolio_id=?",Long.class,portfolioId);
   emitter.onCompletion(()->clients.remove(client));
   emitter.onTimeout(()->{clients.remove(client);emitter.complete();});
   emitter.onError(error->clients.remove(client));
@@ -56,6 +57,11 @@ public class OrderEventStream {
     for(Event event:read(client.portfolioId,client.cursor)) {
      client.emitter.send(SseEmitter.event().name("order").id(Long.toString(event.eventId())).data(event));
      client.cursor=event.eventId();
+    }
+    var notices=jdbc.queryForList("SELECT id FROM notifications WHERE portfolio_id=? AND id>? ORDER BY id LIMIT 100",Long.class,client.portfolioId,client.notificationCursor);
+    if(!notices.isEmpty()) {
+     client.emitter.send(SseEmitter.event().name("notification").data(Map.of("portfolioId",client.portfolioId)));
+     client.notificationCursor=notices.getLast();
     }
     client.emitter.send(SseEmitter.event().comment("heartbeat"));
    }catch(Exception ex){clients.remove(client);client.emitter.completeWithError(ex);}
