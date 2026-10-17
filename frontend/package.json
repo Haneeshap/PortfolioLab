@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "test:m47-m49": "node --import ./tests/register-typescript.mjs --test tests/m47-m49.test.mjs",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
@@ -14,6 +15,7 @@
     "test:m44-m46": "node --import ./tests/register-typescript.mjs --test tests/m44-m46.test.mjs"
   },
   "dependencies": {
+    "highlight.js": "^11.12.0",
     "next": "16.4.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",

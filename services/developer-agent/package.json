@@ -1,0 +1,7 @@
+{
+  "name": "portfoliolab-developer-agent",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node src/server.ts", "test": "node --test test/*.test.ts", "typecheck": "node ../../frontend/node_modules/typescript/bin/tsc -p tsconfig.json" },
+  "engines": { "node": ">=24.12" }
+}

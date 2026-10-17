@@ -41,7 +41,7 @@ Use native Windows PowerShell 5.1 or PowerShell 7. The AI MCP launcher explicitl
 | Tool | Requirement |
 | --- | --- |
 | [Git for Windows](https://git-scm.com/downloads/win) | Git 2.x and access to both repositories |
-| [Node.js](https://nodejs.org/en/download) | Use 24.x with bundled npm 11.x, matching the inspected machine. Next 16 requires >=20.9; AI declares no minimum Node version. Node 24 is the common onboarding baseline. |
+| [Node.js](https://nodejs.org/en/download) | Use Node 24.12 or newer with bundled npm; Developer Studio requires >=24.12. Next 16 alone requires >=20.9; AI declares no minimum Node version. |
 | [JDK](https://adoptium.net/temurin/releases/?version=21) | JDK 21, with JAVA_HOME and PATH configured; a JRE alone is insufficient |
 | [Go](https://go.dev/dl/) | 1.27.0 or compatible newer toolchain, required by go.mod |
 | [Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/) | Linux containers, WSL 2/virtualization enabled, Compose v2; inspected Compose was 2.40.3 |
@@ -65,12 +65,11 @@ Open PowerShell in a parent directory of your choice:
 
 ```powershell
 git clone https://github.com/Nandantechgeek/PortfolioLab.git PortfolioLab
-$aiRepositoryUrl = Read-Host 'Paste the actual portfoliolab-ai Git clone URL'
-git clone $aiRepositoryUrl portfoliolab-ai
+git clone https://github.com/Nandantechgeek/portfoliolab-ai.git portfoliolab-ai
 Set-Location PortfolioLab
 ```
 
-The two directories must be siblings. **The inspected AI repository has no configured Git remote.** Its clone URL cannot be verified; the maintainer must publish/share it and grant access first. Do not assume its GitHub owner or URL.
+The two directories must be siblings. The AI URL above matches the configured origin checked on 17 October 2026; each developer still needs repository access. **The current AI checkout also contains uncommitted changes, including untracked research intelligence source/tests.** Those local revisions need a separate review and verification/publication in the AI repository before a fresh clone can be expected to reproduce that functionality. Publishing PortfolioLab does not publish its sibling repository. The local AI origin tracking state alone does not prove its latest working files are on GitHub.
 
 ## First-time configuration and installation
 
@@ -229,6 +228,8 @@ See [M35-M37 implementation and verification](docs/M35-M37.md) for the new contr
 
 See [ONBOARDING-VALIDATION.md](docs/ONBOARDING-VALIDATION.md) for actual results, existing failures and checks that could not run.
 
+See [the 17 October release verification](docs/RELEASE-VERIFICATION-2026-10-17.md) for current cross-service results, Developer Studio checks, remaining release blockers and safe publication commands.
+
 ## Five-minute demonstration and discussion guide
 
 1. Explain the architecture: Next proxies HTTP, Go streams prices over WebSocket, PostgreSQL holds durable state, and Kafka delivers asynchronous events.
@@ -266,3 +267,9 @@ This is a single-user local demo, not a production brokerage, secure multi-user 
 Docker host ports, Go and AI are configured for loopback; Spring and Next defaults may listen on other interfaces. Do not expose this setup publicly or use real customer data. Production authentication, portfolio ownership checks, TLS, hardened Kafka and secret management are not provided. `.env` is plaintext and ignored. The former Compose file contained a fixed development password; the new local variable does not remove that value from Git history. Never reuse historical demo credentials. Ignore rules protect future files, not secrets already tracked in Git.
 
 See [M38-M40 research, risk and copilot guide](docs/M38-M40.md) for contracts, mathematics, verification evidence and exact local commands.
+
+## Developer Studio (M47–M49)
+
+Open `/developer` for a local developer-only change explorer, exact staged/worktree diffs, approved staging/commits/pushes, and real GitHub Actions results. Start the independent loopback agent with `.\scripts\start-developer-studio.ps1`; it opens a two-minute, one-time local session connection without passphrases. Keep the terminal open: R reconnects, G accepts your own session-only fine-grained GitHub PAT through hidden input, and Q stops the agent. Optional switches enable the explicitly allowlisted sibling AI repository and local Ollama explanations. No brokerage account grants developer access.
+
+See [the Developer Studio guide](docs/M47-M49.md) for setup, architecture, security boundaries, MCP/API contracts, limitations, verification results and the manual workflow checklist. Studio creates unsigned commits without hooks; use your Git client when signing or hooks are required.

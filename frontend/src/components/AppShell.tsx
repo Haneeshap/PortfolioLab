@@ -22,6 +22,7 @@ const groups: NavGroup[] = [
     { label: "Price Alerts", href: "/alerts", glyph: "◎", keywords: "threshold notification" },
   ] },
   { title: "Insights & tools", collapsible: true, items: [
+    { label: "Developer Studio", href: "/developer", glyph: "</>", keywords: "git changes commit push CI developer" },
     { label: "Portfolio Risk Lab", href: "/portfolio/risk", glyph: "L", keywords: "scenario exposure what if" },
     { label: "FX Analytics", href: "/fx", glyph: "⇄", keywords: "currency" },
     { label: "AI Agents", href: "/agents", glyph: "✧", keywords: "risk intelligence" },
