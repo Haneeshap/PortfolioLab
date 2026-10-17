@@ -95,7 +95,7 @@ export default function PortfolioDashboard({
 
         {valuedHoldings.length === 0 ? (
           <p className="text-gray-500">
-            You don't own any assets yet.
+            You don&apos;t own any assets yet.
           </p>
         ) : (
           <div className="overflow-x-auto">

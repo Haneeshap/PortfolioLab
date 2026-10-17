@@ -2,6 +2,8 @@
 
 PortfolioLab is a local educational portfolio and simulated trading system. A Next.js dashboard combines a Spring Boot API, Go price simulator, PostgreSQL, Kafka notifications, and a separate Node.js Ask AI service using Ollama and MCP. It never connects to an exchange or moves real money.
 
+Start here: [Windows quick start](docs/WINDOWS-QUICKSTART.md).
+
 ## Features and architecture
 
 - Portfolio cash, holdings, allocation, valuation, performance history and transactions.
@@ -30,7 +32,7 @@ Spring outbox --> Kafka :9092 --> notification consumer --> PostgreSQL --> UI po
 | `compose.yaml` | PostgreSQL 17, Apache Kafka 3.9.1, named volumes and loopback host ports |
 | sibling `portfoliolab-ai/` | Node/TypeScript, tsx, MCP client/server SDK 2.3.1 range, Zod; Ollama qwen2.5:0.5b |
 
-Flyway automatically applies migrations V1–V21 under `backend/src/main/resources/db/migration`. They seed assets and INR Demo Portfolio (ID 1, initial cash 100000), then add history, FX, outbox/notifications, events, alerts, watchlists, intelligence, risk policies and simulated orders/executions. A fresh database has no traded holdings or execution receipts. Hibernate validates the schema; no database dump or manual table creation is needed.
+Flyway automatically applies migrations V1–V23 under `backend/src/main/resources/db/migration`. They seed assets and INR Demo Portfolio (ID 1, initial cash 100000), then add history, FX, outbox/notifications, events, alerts, watchlists, intelligence, risk policies and simulated orders/executions. A fresh database has no traded holdings or execution receipts. Hibernate validates the schema; no database dump or manual table creation is needed.
 
 Some Java files sit in unusually deep repeated source paths. Maven still compiles below its source root; search by class name when navigating. Backups are not application components.
 
@@ -83,7 +85,7 @@ Copy-Item frontend/.env.example frontend/.env.local
 
 Set DB_PASSWORD to your own unique value of at least 16 letters/digits, unquoted, on one line. Never commit `.env`. Compose automatically reads the root `.env`; Spring does not. The supplied backend launcher loads that password into the backend process. Spring's source fallback password is not the onboarding password.
 
-Next automatically reads `frontend/.env.local`. Only some routes honor BACKEND_URL; other backend routes, Go REST/WebSocket clients, AI clients and Kafka factories use hardcoded addresses. Keep the ports below. AI and Go read no environment settings: invented PORT/OLLAMA_MODEL/AI_SERVICE_URL variables will have no effect.
+Next automatically reads `frontend/.env.local`. Only some routes honor BACKEND_URL; other backend routes, Go REST/WebSocket clients and AI clients use hardcoded addresses. Keep the ports below. AI and Go read no environment settings: invented PORT/OLLAMA_MODEL/AI_SERVICE_URL variables will have no effect.
 
 ```powershell
 # From PortfolioLab; check each command succeeds before continuing.
@@ -200,7 +202,7 @@ Run checks from the main root:
 
 ```powershell
 Push-Location frontend
-npm.cmd run test:m34
+node --import ./tests/register-typescript.mjs --test tests/*.test.mjs
 npm.cmd run lint
 npx.cmd tsc --noEmit
 npm.cmd run build
@@ -213,16 +215,11 @@ Push-Location ../portfoliolab-ai
 npm.cmd test
 npm.cmd run typecheck
 Pop-Location
-# Export the same password as .env for this test terminal; input is masked.
-$securePassword = Read-Host 'DB_PASSWORD from your .env' -AsSecureString
-$env:DB_PASSWORD = [System.Net.NetworkCredential]::new('', $securePassword).Password
-Push-Location backend
-.\mvnw.cmd test
-Pop-Location
-Remove-Item Env:DB_PASSWORD
+# Backend integration: use the isolated database commands in docs/M50-M53.md.
+# Do not run the full suite against existing portfolio data.
 ```
 
-Backend Spring integration tests use the configured development PostgreSQL database, not a disposable isolated fixture. `ReconciliationSqlIntegrationTests` requires an existing filled simulated order/execution receipt with initially consistent evidence. Make a small simulated buy through the UI before the full suite; its mismatch mutation rolls back. For an initial run before that fixture exists, explicitly exclude it with `.\mvnw.cmd '-Dtest=*,!ReconciliationSqlIntegrationTests' test` and record that exclusion. AI tests mock HTTP evidence and test real MCP stdio discovery; Ollama is not required for those tests.
+Backend integration tests use the configured PostgreSQL datasource. Override it to a new isolated test database before the full suite; never use existing portfolio data. ReconciliationSqlIntegrationTests now creates and rolls back its own settled receipt, so no manual trade or exclusion is required. See [M50-M53](docs/M50-M53.md) for commands and current results. AI tests mock HTTP evidence and test real MCP stdio discovery; Ollama is not required for those tests.
 
 See [M35-M37 implementation and verification](docs/M35-M37.md) for the new contracts, migration behavior, reservation policy, checks and manual workflow.
 

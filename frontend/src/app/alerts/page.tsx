@@ -7,7 +7,7 @@ export default function AlertsPage() {
   const { prices, status } = useMarketPrices();
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [symbol, setSymbol] = useState("ORBIT");
-  useEffect(() => { const requested = new URLSearchParams(window.location.search).get("symbol"); if (requested && /^[A-Z0-9._-]{1,20}$/.test(requested)) setSymbol(requested); }, []);
+  useEffect(() => { const requested = new URLSearchParams(window.location.search).get("symbol"); if (requested && /^[A-Z0-9._-]{1,20}$/.test(requested)) { const timer = window.setTimeout(() => setSymbol(requested), 0); return () => window.clearTimeout(timer); } }, []);
   const [direction, setDirection] = useState<"ABOVE" | "BELOW">("ABOVE");
   const [target, setTarget] = useState("");
   const [busy, setBusy] = useState(false);

@@ -38,10 +38,7 @@ const money = (value: number) =>
     maximumFractionDigits: 2,
   }).format(value);
 
-export default function PortfolioPerformanceChart({
-  value: _value,
-  ready: _ready,
-}: {
+export default function PortfolioPerformanceChart({}: {
   value: number;
   ready: boolean;
 }) {
@@ -49,7 +46,7 @@ export default function PortfolioPerformanceChart({
   const [range, setRange] = useState<Range>("1H");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(0);
 
   useEffect(() => {
     let active = true;

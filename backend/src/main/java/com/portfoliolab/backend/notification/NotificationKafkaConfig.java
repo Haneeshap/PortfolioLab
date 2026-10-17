@@ -8,6 +8,7 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -23,13 +24,25 @@ import org.springframework.kafka.core.ProducerFactory;
 @EnableKafka
 public class NotificationKafkaConfig {
 
+    @Value("${spring.kafka.bootstrap-servers:localhost:9092}")
+    private String bootstrapServers;
+
+    @Value("${spring.kafka.consumer.group-id:portfoliolab-notifications-v1}")
+    private String consumerGroup;
+
+    @Value("${spring.kafka.consumer.auto-offset-reset:earliest}")
+    private String offsetReset;
+
+    @Value("${spring.kafka.listener.auto-startup:true}")
+    private boolean listenerAutoStartup;
+
     @Bean
     public ProducerFactory<String, String> notificationProducerFactory() {
         Map<String, Object> properties = new HashMap<>();
 
         properties.put(
                 ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,
-                "localhost:9092"
+                bootstrapServers
         );
 
         properties.put(
@@ -64,12 +77,12 @@ public class NotificationKafkaConfig {
 
         properties.put(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG,
-                "localhost:9092"
+                bootstrapServers
         );
 
         properties.put(
                 ConsumerConfig.GROUP_ID_CONFIG,
-                "portfoliolab-notifications-v1"
+                consumerGroup
         );
 
         properties.put(
@@ -84,7 +97,7 @@ public class NotificationKafkaConfig {
 
         properties.put(
                 ConsumerConfig.AUTO_OFFSET_RESET_CONFIG,
-                "earliest"
+                offsetReset
         );
 
         properties.put(
@@ -105,6 +118,7 @@ public class NotificationKafkaConfig {
                 new ConcurrentKafkaListenerContainerFactory<String, String>();
 
         factory.setConsumerFactory(notificationConsumerFactory);
+        factory.setAutoStartup(listenerAutoStartup);
         factory.getContainerProperties().setAckMode(org.springframework.kafka.listener.ContainerProperties.AckMode.RECORD);
         // Never discard a committed outbox event during a prolonged database outage.
         var errors = new org.springframework.kafka.listener.DefaultErrorHandler(

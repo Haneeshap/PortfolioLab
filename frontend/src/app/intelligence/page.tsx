@@ -19,7 +19,7 @@ export default function IntelligencePage(){
    setEvents(data as Event[]);setError("");setLastUpdated(new Date());
   }catch(e){setError(e instanceof Error?e.message:"Unable to load intelligence");}finally{setLoading(false);}
  },[scope,type]);
- useEffect(()=>{void refresh();const timer=window.setInterval(()=>void refresh(),10000);return()=>window.clearInterval(timer);},[refresh]);
+ useEffect(()=>{const first=window.setTimeout(()=>void refresh(),0);const timer=window.setInterval(()=>void refresh(),10000);return()=>{window.clearTimeout(first);window.clearInterval(timer);};},[refresh]);
  const rises=useMemo(()=>events.filter(e=>e.eventType==="SURGE").length,[events]);
  const drops=events.length-rises;
  return <div className="mi-page">

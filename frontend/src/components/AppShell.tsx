@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import NotificationBell from "./NotificationBell";
 import PortfolioChat from "./PortfolioChat";
 import "./portfolio-shell.css";
@@ -32,18 +32,28 @@ const groups: NavGroup[] = [
 ];
 const allItems = groups.flatMap((g) => g.items);
 
+type Theme = "dark" | "light" | "system";
+function readTheme(): Theme {
+  const saved = window.localStorage.getItem("portfoliolab-theme");
+  return saved === "dark" || saved === "light" ? saved : "system";
+}
+function subscribeTheme(change: () => void) {
+  window.addEventListener("storage", change);
+  window.addEventListener("portfoliolab-theme-change", change);
+  return () => { window.removeEventListener("storage", change); window.removeEventListener("portfoliolab-theme-change", change); };
+}
+
 export default function AppShell({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<"dark" | "light" | "system">("system");
-  useEffect(() => {
-    const saved = window.localStorage.getItem("portfoliolab-theme");
-    if (saved === "dark" || saved === "light" || saved === "system") setTheme(saved);
-  }, []);
+  const theme = useSyncExternalStore(subscribeTheme, readTheme, () => "system" as const);
+  function setTheme(mode: Theme) {
+    window.localStorage.setItem("portfoliolab-theme", mode);
+    window.dispatchEvent(new Event("portfoliolab-theme-change"));
+  }
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     const apply = () => { document.documentElement.dataset.plTheme = theme === "system" ? (media.matches ? "dark" : "light") : theme; };
     apply();
     media.addEventListener("change", apply);
-    window.localStorage.setItem("portfoliolab-theme", theme);
     return () => media.removeEventListener("change", apply);
   }, [theme]);
   const pathname = usePathname();
@@ -57,17 +67,22 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const current = allItems.find((item) => item.href === pathname) ?? allItems.find((item) => item.href !== "/" && pathname.startsWith(item.href + "/"));
   const filtered = useMemo(() => allItems.filter((item) => `${item.label} ${item.keywords ?? ""}`.toLowerCase().includes(query.trim().toLowerCase())), [query]);
 
+  function openSearch() { setQuery(""); setSelected(0); setSearchOpen(true); }
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setSearchOpen((v) => !v); }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setQuery(""); setSelected(0); setSearchOpen((v) => !v); }
       if (e.key === "Escape") { setSearchOpen(false); setMobileOpen(false); }
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, []);
-  useEffect(() => { if (searchOpen) { setQuery(""); setSelected(0); const t = window.setTimeout(() => searchRef.current?.focus(), 30); return () => window.clearTimeout(t); } }, [searchOpen]);
-  useEffect(() => { if (groups[2].items.some((item) => pathname === item.href)) setToolsOpen(true); }, [pathname]);
-  useEffect(() => { setMobileOpen(false); }, [pathname]);
+  useEffect(() => { if (searchOpen) { const t = window.setTimeout(() => searchRef.current?.focus(), 30); return () => window.clearTimeout(t); } }, [searchOpen]);
+  const [previousPathname, setPreviousPathname] = useState<string | null>(null);
+  if (previousPathname !== pathname) {
+    setPreviousPathname(pathname);
+    setMobileOpen(false);
+    if (groups[2].items.some(item => pathname === item.href)) setToolsOpen(true);
+  }
   function navigate(href: string) { setSearchOpen(false); setMobileOpen(false); router.push(href); }
 
   return <div className="pl-shell">
@@ -88,7 +103,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
     <div className="pl-workspace">
       <header className="pl-header">
         <div className="pl-header-left"><button className="pl-mobile-menu" aria-label="Open navigation" aria-expanded={mobileOpen} onClick={() => setMobileOpen((v) => !v)}>☰</button><div className="pl-page-heading"><div className="pl-eyebrow">PORTFOLIOLAB <span>/</span> SIMULATOR</div><h1>{current?.label ?? "PortfolioLab"}</h1></div></div>
-        <div className="pl-header-right"><button className="pl-header-search" onClick={() => setSearchOpen(true)} aria-label="Open command search"><span>⌕</span><span className="pl-header-search-label">Quick search</span><kbd>Ctrl K</kbd></button><div className="pl-theme-switch" role="group" aria-label="Color theme">
+        <div className="pl-header-right"><button className="pl-header-search" onClick={openSearch} aria-label="Open command search"><span>⌕</span><span className="pl-header-search-label">Quick search</span><kbd>Ctrl K</kbd></button><div className="pl-theme-switch" role="group" aria-label="Color theme">
           {(["light", "dark", "system"] as const).map((mode) => <button key={mode} type="button" title={mode === "system" ? "Auto: follows your Windows/browser appearance" : `${mode[0].toUpperCase()}${mode.slice(1)} appearance`} aria-label={mode === "system" ? "Auto theme (follows system settings)" : `${mode} theme`} aria-pressed={theme === mode} className={theme === mode ? "pl-theme-active" : ""} onClick={() => setTheme(mode)}>{mode === "light" ? "☀" : mode === "dark" ? "☾" : "Auto"}</button>)}
         </div><span className="pl-header-divider" /><NotificationBell /><span className="pl-mode-pill"><span className="pl-live-dot" /> Simulation</span></div>
       </header>

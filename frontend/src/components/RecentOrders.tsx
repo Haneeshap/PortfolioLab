@@ -46,7 +46,7 @@ export default function RecentOrders({ submittedOrder, onOrdersChanged, assets }
   const onChange = useRef(onOrdersChanged);
   const mounted = useRef(false);
   useEffect(() => { onChange.current = onOrdersChanged; }, [onOrdersChanged]);
-  useEffect(() => { const id=Number(new URLSearchParams(window.location.search).get("orderId")); if(Number.isSafeInteger(id) && id>0) setSelectedId(id); }, []);
+  useEffect(() => { const id=Number(new URLSearchParams(window.location.search).get("orderId")); if(Number.isSafeInteger(id) && id>0) { const timer=window.setTimeout(()=>setSelectedId(id),0); return ()=>window.clearTimeout(timer); } }, []);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   useEffect(() => {

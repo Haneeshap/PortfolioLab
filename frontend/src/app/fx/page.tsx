@@ -142,9 +142,9 @@ export default function FxAnalyticsPage() {
     if (rateMode !== "automatic") return;
 
     const controller = new AbortController();
-    void loadRates(controller.signal);
+    const timer = window.setTimeout(() => void loadRates(controller.signal), 0);
 
-    return () => controller.abort();
+    return () => { window.clearTimeout(timer); controller.abort(); };
   }, [loadRates, rateMode]);
 
   function updateValue(key: keyof Values, value: string) {

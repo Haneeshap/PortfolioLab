@@ -76,22 +76,16 @@ export default function TradeForm({
 
   const [assetId, setAssetId] = useState(initialAssetId);
 
-  useEffect(() => {
-    if (
-      requestedAssetId &&
-      assets.some((asset) => String(asset.id) === requestedAssetId)
-    ) {
-      setAssetId(requestedAssetId);
-    }
-  }, [requestedAssetId, assets]);
-  useEffect(() => {
-    if (
-      holdingTradeRequest &&
-      assets.some((asset) => asset.id === holdingTradeRequest.assetId)
-    ) {
-      setAssetId(String(holdingTradeRequest.assetId));
-    }
-  }, [holdingTradeRequest, assets]);
+  // Prop-driven selections update before rendering children; ordinary quote refreshes
+  // must not reset an asset the user selected manually.
+  const requestedSelection = requestedAssetId && assets.some(asset => String(asset.id) === requestedAssetId) ? requestedAssetId : null;
+  const holdingSelection = holdingTradeRequest && assets.some(asset => asset.id === holdingTradeRequest.assetId) ? holdingTradeRequest : null;
+  const [previousSelection, setPreviousSelection] = useState({ requested: requestedSelection, holding: holdingSelection });
+  if (previousSelection.requested !== requestedSelection || previousSelection.holding?.sequence !== holdingSelection?.sequence || previousSelection.holding?.assetId !== holdingSelection?.assetId) {
+    setPreviousSelection({ requested: requestedSelection, holding: holdingSelection });
+    if (holdingSelection && (previousSelection.holding?.sequence !== holdingSelection.sequence || previousSelection.holding?.assetId !== holdingSelection.assetId)) setAssetId(String(holdingSelection.assetId));
+    else if (requestedSelection) setAssetId(requestedSelection);
+  }
 
   const [type, setType] = useState<"BUY" | "SELL">("BUY");
   const [orderType, setOrderType] = useState<"MARKET" | "LIMIT">("MARKET");
@@ -111,7 +105,7 @@ export default function TradeForm({
   },[portfolio,submittedOrder]);
   const buyingPower=availability===null?null:Number(availability.availableBuyingPower);
   const [market, setMarket] = useState<Market>("NSE");
-  const [validating, setValidating] = useState(false);
+  const [pendingValidationKey, setPendingValidationKey] = useState<string | null>(null);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [orderPreview, setOrderPreview] = useState<OrderPreview | null>(null);
@@ -200,6 +194,12 @@ export default function TradeForm({
     availableShares,
   });
 
+  const [previousValidationKey, setPreviousValidationKey] = useState(validationKey);
+  if (previousValidationKey !== validationKey) {
+    setPreviousValidationKey(validationKey);
+    setPendingValidationKey(null);
+  }
+  const validating = pendingValidationKey === validationKey;
   const [validatedKey, setValidatedKey] = useState<string | null>(null);
 
   const latestValidationKey = useRef(validationKey);
@@ -210,7 +210,7 @@ export default function TradeForm({
 
   validationAbortController.current?.abort();
   validationAbortController.current = null;
-  setValidating(false);
+  return () => { validationAbortController.current?.abort(); validationAbortController.current = null; };
 }, [validationKey]);
 
   const currentValidation = validation;
@@ -313,7 +313,7 @@ export default function TradeForm({
       return;
     }
 
-    setValidating(true);
+    setPendingValidationKey(validationKey);
     setValidation(null);
     setOrderPreview(null);
     setValidatedKey(null);
@@ -436,7 +436,7 @@ setValidatedKey(requestKey);
     } finally {
   if (validationAbortController.current === controller) {
     validationAbortController.current = null;
-    setValidating(false);
+    setPendingValidationKey(null);
   }
 }
   }
@@ -785,7 +785,7 @@ setValidatedKey(requestKey);
 
               <p className="mt-4 text-xs leading-5 text-slate-500">
                 Illustrative allocation using current portfolio valuations and
-                the backend's estimated trade amount. Execution prices, FX,
+                the backend&apos;s estimated trade amount. Execution prices, FX,
                 charges, and portfolio values may differ. No trade is executed
                 by this preview.
               </p>

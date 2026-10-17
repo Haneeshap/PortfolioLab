@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useMarketPrices } from "@/components/MarketPriceProvider";
 import type { Asset } from "@/app/assets";
@@ -17,6 +17,13 @@ export default function AssetCatalog({
 }: {
   assets: Asset[];
 }) {
+  const [now, setNow] = useState(0);
+  useEffect(() => {
+    const tick = () => setNow(Date.now());
+    const first = window.setTimeout(tick, 0);
+    const timer = window.setInterval(tick, 1000);
+    return () => { window.clearTimeout(first); window.clearInterval(timer); };
+  }, []);
   const [search, setSearch] = useState("");
   const [selectedAssetId, setSelectedAssetId] = useState<number | null>(null);
   const { prices, status } = useMarketPrices();
@@ -110,8 +117,8 @@ export default function AssetCatalog({
                 Number.isFinite(selectedQuote.price) &&
                 selectedQuote.price > 0 &&
                 Number.isFinite(Date.parse(selectedQuote.updatedAt)) &&
-                Date.now() - Date.parse(selectedQuote.updatedAt) >= -10000 &&
-                Date.now() - Date.parse(selectedQuote.updatedAt) <= 60000
+                now - Date.parse(selectedQuote.updatedAt) >= -10000 &&
+                now - Date.parse(selectedQuote.updatedAt) <= 60000
                   ? formatPrice(selectedQuote.price, selectedQuote.currency)
                   : "Unavailable"}
               </p>
@@ -163,8 +170,8 @@ export default function AssetCatalog({
                 Number.isFinite(quote.price) &&
                 quote.price > 0 &&
                 Number.isFinite(Date.parse(quote.updatedAt)) &&
-                Date.now() - Date.parse(quote.updatedAt) <= 60000 &&
-                Date.now() - Date.parse(quote.updatedAt) >= -10000;
+                now - Date.parse(quote.updatedAt) <= 60000 &&
+                now - Date.parse(quote.updatedAt) >= -10000;
 
               return (
                 <tr

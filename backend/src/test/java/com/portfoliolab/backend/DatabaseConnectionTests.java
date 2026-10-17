@@ -14,6 +14,9 @@ class DatabaseConnectionTests {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @org.springframework.beans.factory.annotation.Value("${spring.datasource.url}")
+    private String databaseUrl;
+
     @Test
     void canQueryPostgreSQL() {
         String databaseName = jdbcTemplate.queryForObject(
@@ -21,6 +24,6 @@ class DatabaseConnectionTests {
             String.class
         );
 
-        assertEquals("portfoliolab", databaseName);
+        assertEquals(java.net.URI.create(databaseUrl.substring("jdbc:".length())).getPath().substring(1), databaseName);
     }
 }

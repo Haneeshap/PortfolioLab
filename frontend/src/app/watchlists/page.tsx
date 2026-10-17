@@ -10,7 +10,7 @@ export default function WatchlistsPage(){
  const [name,setName]=useState(""); const [search,setSearch]=useState("");
  const [error,setError]=useState("");const [busy,setBusy]=useState(false);
  const load=useCallback(async()=>{try{const r=await fetch("/api/portfolio/watchlists",{cache:"no-store"});if(!r.ok)throw Error("Unable to load watchlists");const data:Watchlist[]=await r.json();setLists(data);setSelected(prev=>data.some(x=>x.id===prev)?prev:(data[0]?.id??null));}catch(e){setError(e instanceof Error?e.message:"Request failed");}},[]);
- useEffect(()=>{void load()},[load]);
+ useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer);},[load]);
  const current=lists.find(x=>x.id===selected);
  const quoteMap=useMemo(()=>new Map(prices.map(p=>[p.symbol,p])),[prices]);
  const available=useMemo(()=>prices.filter(p=>!current?.symbols.includes(p.symbol)&&p.symbol.toLowerCase().includes(search.toLowerCase())).sort((a,b)=>a.symbol.localeCompare(b.symbol)),[prices,current,search]);

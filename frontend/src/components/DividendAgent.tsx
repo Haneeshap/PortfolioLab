@@ -13,12 +13,6 @@ type DividendSimulation = {
   disclaimer: string;
 };
 
-const currencySymbols: Record<Currency, string> = {
-  INR: "INR",
-  USD: "USD",
-  EUR: "EUR"
-};
-
 export default function DividendAgent() {
   const [shares, setShares] = useState("50");
   const [rate, setRate] = useState("5");

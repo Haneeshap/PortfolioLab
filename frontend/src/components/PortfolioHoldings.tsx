@@ -68,7 +68,7 @@ export default function PortfolioHoldings({ assets }: { assets: Asset[] }) {
 
       <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
         {holdings.length === 0 ? (
-          <p className="p-6 text-slate-400">You don't own any assets yet.</p>
+          <p className="p-6 text-slate-400">You don&apos;t own any assets yet.</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
