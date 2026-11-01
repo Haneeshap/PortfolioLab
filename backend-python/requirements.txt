@@ -1,0 +1,17 @@
+fastapi
+uvicorn[standard]
+sqlalchemy[asyncio]
+asyncpg
+alembic
+pydantic-settings
+pydantic[email]
+ollama
+pgvector
+python-dotenv
+httpx
+passlib[bcrypt]
+python-jose[cryptography]
+redis
+aiokafka
+slowapi
+prometheus-fastapi-instrumentator

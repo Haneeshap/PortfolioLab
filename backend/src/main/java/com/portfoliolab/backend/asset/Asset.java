@@ -29,6 +29,9 @@ public class Asset {
     @Column(nullable = false, length = 3)
     private String currency;
 
+    @Column(length = 1000)
+    private String description;
+
     protected Asset() {
     }
 
@@ -57,5 +60,13 @@ public class Asset {
 
     public String getCurrency() {
         return currency;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
     }
 }

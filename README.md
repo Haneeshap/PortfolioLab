@@ -4,6 +4,28 @@ PortfolioLab is a local educational portfolio and simulated trading system. A Ne
 
 Start here: [Windows quick start](docs/WINDOWS-QUICKSTART.md).
 
+## Quickstart: Python Backend
+
+1. Start infrastructure:
+   ```powershell
+   docker compose up -d postgres kafka market-simulator
+   ```
+2. Start the Python backend:
+   ```powershell
+   cd backend-python
+   pip install -r requirements.txt
+   uvicorn app.main:app --reload --port 8000
+   ```
+3. Start the frontend:
+   ```powershell
+   cd frontend
+   npm install
+   npm run dev
+   ```
+4. Open [http://localhost:3000](http://localhost:3000) in your browser.
+```
+
+
 ## Features and architecture
 
 - Portfolio cash, holdings, allocation, valuation, performance history and transactions.
@@ -15,19 +37,16 @@ Start here: [Windows quick start](docs/WINDOWS-QUICKSTART.md).
 - Ask AI educational explanations, holdings analysis and read-only order/reconciliation evidence.
 
 ```text
-Browser :3000 --> Next.js API routes --> Spring Boot :8080 --> PostgreSQL :5432
+Browser :3000 --> Next.js API routes --> Python FastAPI :8000 --> PostgreSQL :5432
     |                   |
-    |                   +--> AI :3101 --> MCP stdio child --> Spring Boot
-    |                              +---> Ollama :11434
-    +--WebSocket--> Go :8081 <--HTTP-- Spring Boot
-Browser --SSE--> Next.js order event proxy --> Spring committed order journal
-Spring outbox --> Kafka :9092 --> notification consumer --> PostgreSQL --> UI polling
+    |                   +--> Kafka :9092 --> notification consumer --> PostgreSQL --> UI polling
+    +--WebSocket--> Go :8081 <--HTTP-- prices
 ```
 
 | Source | Stack declared in repository |
 | --- | --- |
 | `frontend/` | Next.js 16.4.0 App Router, React 19.3.0, TypeScript 5, Tailwind 4, Recharts; npm lockfile |
-| `backend/` | Java 21, Spring Boot 4.1.1, MVC/JPA, Flyway, PostgreSQL driver, Spring Kafka; Maven wrapper 3.10.0 |
+| `backend-python/` | Python 3.11, FastAPI, SQLAlchemy async, pgvector, httpx, aiokafka; pip requirements |
 | `services/market-simulator/` | Go 1.27.0, coder/websocket; go.mod/go.sum |
 | `compose.yaml` | PostgreSQL 17, Apache Kafka 3.9.1, named volumes and loopback host ports |
 | sibling `portfoliolab-ai/` | Node/TypeScript, tsx, MCP client/server SDK 2.3.1 range, Zod; Ollama qwen2.5:0.5b |
@@ -230,7 +249,7 @@ See [the 17 October release verification](docs/RELEASE-VERIFICATION-2026-10-17.m
 ## Five-minute demonstration and discussion guide
 
 1. Explain the architecture: Next proxies HTTP, Go streams prices over WebSocket, PostgreSQL holds durable state, and Kafka delivers asynchronous events.
-2. Open Markets and show five-second fictional price updates. Open Portfolio: on a fresh installation it has INR cash and no traded holdings.
+2. Open Markets and show five-second fictional price updates. Open Portfolio: on a fresh installation it has INR cash and no traded holdings. 
 3. Preview a small buy of a catalog asset, explain risk checks, submit once and inspect its final order status. Then show holdings, cash and transactions. This changes persistent demo data; rules may legitimately reject an order.
 4. Show notifications. Explain the database outbox, Kafka publication and consumer persistence. Broker outages can delay notifications independently of trading results.
 5. Ask AI “Summarize my portfolio holdings”, “List my simulated orders”, and “Show my reconciliation report”. Holdings explanations use Ollama. Order/reconciliation answers use deterministic read-only evidence and bypass the model. An empty order list is valid before trading.

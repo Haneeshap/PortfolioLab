@@ -4,6 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useMarketPrices } from "@/components/MarketPriceProvider";
 import type { Asset } from "@/app/assets";
+import {
+  searchAssetsSemantic,
+  type AssetSearchResult,
+} from "@/app/assets";
 
 function formatPrice(value: number, currency: string) {
   return new Intl.NumberFormat("en-IN", {
@@ -25,6 +29,10 @@ export default function AssetCatalog({
     return () => { window.clearTimeout(first); window.clearInterval(timer); };
   }, []);
   const [search, setSearch] = useState("");
+  const [semanticQuery, setSemanticQuery] = useState("");
+  const [semanticResults, setSemanticResults] = useState<AssetSearchResult[]>([]);
+  const [semanticLoading, setSemanticLoading] = useState(false);
+  const [semanticError, setSemanticError] = useState<string | null>(null);
   const [selectedAssetId, setSelectedAssetId] = useState<number | null>(null);
   const { prices, status } = useMarketPrices();
 
@@ -45,6 +53,25 @@ export default function AssetCatalog({
 
   const selectedAsset =
     assets.find((asset) => asset.id === selectedAssetId) ?? null;
+
+  async function handleSemanticSearch(event: React.FormEvent) {
+    event.preventDefault();
+    const q = semanticQuery.trim();
+    if (!q) return;
+    setSemanticLoading(true);
+    setSemanticError(null);
+    try {
+      const results = await searchAssetsSemantic(q, 5);
+      setSemanticResults(results);
+    } catch (error) {
+      setSemanticError(
+        error instanceof Error ? error.message : "Semantic search failed"
+      );
+      setSemanticResults([]);
+    } finally {
+      setSemanticLoading(false);
+    }
+  }
 
   const selectedQuote = selectedAsset
     ? livePrices.get(selectedAsset.symbol)
@@ -91,6 +118,62 @@ export default function AssetCatalog({
           placeholder="Search by company or symbol"
           className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:border-emerald-500 sm:max-w-md"
         />
+      </div>
+
+      <div className="border-b border-slate-800 px-6 py-5">
+        <h3 className="text-sm font-semibold text-slate-200">
+          Semantic search (AI)
+        </h3>
+        <p className="mt-1 text-xs text-slate-400">
+          Describe what you are looking for in natural language; results are
+          ranked by embedding similarity.
+        </p>
+        <form onSubmit={handleSemanticSearch} className="mt-3 flex gap-2">
+          <input
+            type="search"
+            value={semanticQuery}
+            onChange={(event) => setSemanticQuery(event.target.value)}
+            placeholder="e.g. renewable energy technology stocks"
+            className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-4 py-2 text-sm outline-none focus:border-emerald-500"
+          />
+          <button
+            type="submit"
+            disabled={semanticLoading}
+            className="rounded-lg border border-emerald-500/40 px-4 py-2 text-sm font-medium text-emerald-400 transition hover:bg-emerald-500/10 disabled:opacity-50"
+          >
+            {semanticLoading ? "Searching..." : "Search"}
+          </button>
+        </form>
+        {semanticError && (
+          <p className="mt-2 text-xs text-rose-400">{semanticError}</p>
+        )}
+        {semanticResults.length > 0 && (
+          <ul className="mt-3 space-y-2">
+            {semanticResults.map((result) => (
+              <li
+                key={result.assetId}
+                className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2"
+              >
+                <div>
+                  <span className="font-semibold text-emerald-400">
+                    {result.symbol}
+                  </span>
+                  <span className="ml-2 text-sm text-slate-300">
+                    {result.name}
+                  </span>
+                  {result.sector && (
+                    <span className="ml-2 text-xs text-slate-500">
+                      {result.sector}
+                    </span>
+                  )}
+                </div>
+                <span className="text-xs tabular-nums text-slate-400">
+                  {(result.similarity * 100).toFixed(1)}%
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       {selectedAsset && (

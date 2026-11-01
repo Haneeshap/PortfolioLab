@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install ruff
+        run: pip install ruff
+      - name: Run ruff
+        working-directory: backend-python
+        run: ruff check .
+
+  type:
+    name: Type check (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        working-directory: backend-python
+        run: pip install -r requirements.txt mypy
+      - name: Run mypy --strict
+        working-directory: backend-python
+        run: mypy --strict --config-file mypy.ini
+
+  test:
+    name: Tests (pytest)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: portfoliolab
+          POSTGRES_PASSWORD: PortfolioLabLocalDev2026
+          POSTGRES_DB: portfoliolab
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+      kafka:
+        image: bitnami/kafka:latest
+        env:
+          KAFKA_CFG_NODE_ID: 0
+          KAFKA_CFG_PROCESS_ROLES: controller,broker
+          KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+          KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+          KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+          KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 0@localhost:9093
+        ports:
+          - 9092:9092
+    env:
+      DB_PASSWORD: PortfolioLabLocalDev2026
+      DATABASE_URL: postgresql+asyncpg://portfoliolab:PortfolioLabLocalDev2026@localhost:5432/portfoliolab
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        working-directory: backend-python
+        run: pip install -r requirements.txt pytest pytest-asyncio
+      - name: Run alembic migrations
+        working-directory: backend-python
+        run: alembic upgrade head || true
+      - name: Run tests
+        working-directory: backend-python
+        run: python -m pytest tests/contract -v
+
+  build:
+    name: Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        working-directory: backend-python
+        run: docker build -t portfoliolab-py .
+
+  safety:
+    name: Safety check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install safety
+        run: pip install safety
+      - name: Run safety check
+        working-directory: backend-python
+        run: safety check -r requirements.txt || true
+
+  bandit:
+    name: Bandit scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install bandit
+        run: pip install bandit
+      - name: Run bandit
+        working-directory: backend-python
+        run: bandit -r app -ll
