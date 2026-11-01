@@ -1,46 +1,36 @@
-# Node.js
+# Windows installers
+*.exe
+*.msi
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node
 node_modules/
+
+# Build outputs
+dist/
+build/
 .next/
 out/
 
-# Java
-target/
-build/
-.gradle/
-
 # Environment variables
 .env
-.env.local
-.env.*.local
-
-# IDE
-.idea/
-.vscode/
-
-# System files
-.DS_Store
-Thumbs.db
-
-# Python (future)
-__pycache__/
-.venv/
-backend/startup.log
-
-# Local backups and temporary files
-backups/
-*.bak
-*.log
-
-# Local secrets
 .env.*
 !.env.example
 
-# Local exports, audit captures and generated tooling state
-database-backups/
-*-backup-*/
-*-backups-*/
-*.sql.gz
-*.dump
-*.tsbuildinfo
-*-audit.txt
-*-audit.zip
+# Logs and temporary reports
+*.log
+test_output.txt
+mypy_output*.txt
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
